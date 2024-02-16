@@ -1,0 +1,106 @@
+use std::vec::Vec;
+use std::collections::HashMap;
+use anyhow::{Result, anyhow};
+
+use crate::parser as parser;
+
+const ANNOTATION_PREFIX: &str = "cdi.k8s.io/";
+const MAX_NAME_LEN: usize = 63;
+
+// UpdateAnnotations updates annotations with a plugin-specific CDI device
+// injection request for the given devices. Upon any error a non-nil error
+// is returned and annotations are left intact. By convention plugin should
+// be in the format of "vendor.device-type".
+pub(crate) fn update() {
+    println!("cdi::annotations::update");
+}
+// ParseAnnotations parses annotations for CDI device injection requests.
+// The keys and devices from all such requests are collected into slices
+// which are returned as the result. All devices are expected to be fully
+// qualified CDI device names. If any device fails this check empty slices
+// are returned along with a non-nil error. The annotations are expected
+// to be formatted by, or in a compatible fashion to UpdateAnnotations().
+pub(crate) fn parse_annotations(
+    annotations: HashMap<String, String>,
+) -> Result<(Vec<String>, Vec<String>), anyhow::Error> {
+    let mut keys: Vec<String> = Vec::new();
+    let mut devices: Vec<String> = Vec::new();
+
+    for (k, v) in annotations {
+        if !k.starts_with(ANNOTATION_PREFIX) {
+            continue;
+        }
+
+
+        for device in v.split(',') {
+            match parser::parse_qualified_name(device) {
+                Err(_) => return Err(anyhow!("invalid CDI device name {}", device)),
+                _ => (),
+            }
+            devices.push(device.to_string());
+        }
+        keys.push(k);
+    }
+    Ok((keys, devices))
+}
+// AnnotationKey returns a unique annotation key for an device allocation
+// by a K8s device plugin. pluginName should be in the format of
+// "vendor.device-type". deviceID is the ID of the device the plugin is
+// allocating. It is used to make sure that the generated key is unique
+// even if multiple allocations by a single plugin needs to be annotated.
+pub(crate) fn annotation_key(plugin_name: &str, device_id: &str) -> Result<String> {
+    if plugin_name.is_empty() {
+        return Err(anyhow!("invalid plugin name, empty"));
+    }
+    if device_id.is_empty() {
+        return Err(anyhow!("invalid deviceID, empty"));
+    }
+
+    let name = plugin_name.to_owned() + "_" + &device_id.replace("/", "_");
+
+    if name.len() > MAX_NAME_LEN {
+        return Err(anyhow!("invalid plugin+deviceID {:?}, too long", name));
+    }
+
+    if let Some(first) = name.chars().next() {
+        if !first.is_alphanumeric() {
+            return Err(anyhow!("invalid name {:?}, first '{}' should be alphanumeric", name, first));
+        }
+    }
+
+    if name.len() > 2 {
+        for c in name[1..name.len() - 1].chars() {
+            match c {
+                c if c.is_alphanumeric() => {},
+                '_' | '-' | '.' => {},
+                _ => return Err(anyhow!("invalid name {:?}, invalid character '{}'", name, c)),
+            }
+        }
+    }
+
+    if let Some(last) = name.chars().last() {
+        if !last.is_alphanumeric() {
+            return Err(anyhow!("invalid name {:?}, last '{}' should be alphanumeric", name, last));
+        }
+    }
+
+    Ok(ANNOTATION_PREFIX.to_string() + &name)
+}
+
+// AnnotationValue returns an annotation value for the given devices.
+pub(crate) fn annotation_value(devices: Vec<String>) -> Result<String, anyhow::Error> {
+    devices.iter().try_for_each(|device| {
+        // Assuming parser::parse_qualified_name expects a &String and returns Result<(), Error>
+        match crate::parser::parse_qualified_name(device) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e),
+        }
+    })?;
+
+    let device_strs: Vec<&str> = devices.iter().map(AsRef::as_ref).collect();
+    let value = device_strs.join(",");
+
+    Ok(value)
+}
+
+
