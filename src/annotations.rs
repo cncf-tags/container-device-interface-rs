@@ -104,3 +104,59 @@ pub(crate) fn annotation_value(devices: Vec<String>) -> Result<String, anyhow::E
 }
 
 
+#[cfg(test)]
+
+mod tests {
+    use std::collections::HashMap;
+    use crate::annotations;
+
+    #[test]
+	fn parse_annotations() {
+
+		
+		let mut cdi_devices = HashMap::new();
+
+		cdi_devices.insert("cdi.k8s.io/vfio17".to_string(), "nvidia.com/gpu=0".to_string());
+		cdi_devices.insert("cdi.k8s.io/vfio18".to_string(), "nvidia.com/gpu=1".to_string());
+		cdi_devices.insert("cdi.k8s.io/vfio19".to_string(), "nvidia.com/gpu=all".to_string());
+
+		match annotations::parse_annotations(cdi_devices) {
+			Ok((keys, devices)) => {
+				assert_eq!(keys.len(), 3);
+				assert_eq!(devices.len(), 3);
+			},
+			Err(e) => {
+				println!("error: {}", e);
+			}  
+		} 
+
+
+	}
+	
+	#[test]
+	fn annotation_value() {
+		let devices = vec!["nvidia.com/gpu=0".to_string(), "nvidia.com/gpu=1".to_string()];
+		match annotations::annotation_value(devices) {
+			Ok(value) => {
+				assert_eq!(value, "nvidia.com/gpu=0,nvidia.com/gpu=1");
+			},
+			Err(e) => {
+				println!("error: {}", e);
+			}
+		}
+	}
+
+	#[test]
+	fn annotation_key() {
+		let plugin_name = "nvida-device-plugin";
+		let device_id = "gpu=0";
+		match annotations::annotation_key(plugin_name, device_id) {
+			Ok(key) => {
+				assert_eq!(key, "nvidia-device-plugin_gpu=0");
+			},
+			Err(e) => {
+				println!("error: {}", e);
+			}
+		}
+	}
+}
