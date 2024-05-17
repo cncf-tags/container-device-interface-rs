@@ -12,22 +12,26 @@ use anyhow::{anyhow, Result};
 // A valid device name may contain the following runes:
 //
 //	'A'-'Z', 'a'-'z', '0'-'9', '-', '_', '.', ':'
+#[allow(dead_code)]
 pub(crate) fn qualified_name(vendor: &str, class: &str, name: &str) -> String {
     format!("{}/{}={}", vendor, class, name)
 }
+
 // IsQualifiedName tests if a device name is qualified.
+#[allow(dead_code)]
 pub(crate) fn is_qualified_name(name: &str) -> bool {
     match parse_qualified_name(name) {
         Ok(_) => {
-            print!("{} is a qualified name\n", name);
+            println!("{} is a qualified name", name);
             true
         }
         Err(e) => {
-            println!("{} is not a qualified name, {}\n", name, e);
+            println!("{} is not a qualified name, {}", name, e);
             false
         }
     }
 }
+
 // ParseQualifiedName splits a qualified name into device vendor, class,
 // and name. If the device fails to parse as a qualified name, or if any
 // of the split components fail to pass syntax validation, vendor and
@@ -46,26 +50,24 @@ pub(crate) fn parse_qualified_name(
     if name.is_empty() {
         return Err(anyhow!("unqualified device {}, missing name", device));
     }
-    match validate_vendor_name(vendor) {
-        Err(e) => return Err(anyhow!("invalid device {}: {}", device, e)),
-        _ => (),
+    if let Err(e) = validate_vendor_name(vendor) {
+        return Err(anyhow!("invalid vendor {}: {}", device, e));
     }
-    match validate_class_name(class) {
-        Err(e) => return Err(anyhow!("invalid device {}: {}", device, e)),
-        _ => (),
+    if let Err(e) = validate_class_name(class) {
+        return Err(anyhow!("invalid class {}: {}", device, e));
     }
-    match validate_device_name(name) {
-        Err(e) => return Err(anyhow!("invalid device {}: {}", device, e)),
-        _ => (),
+    if let Err(e) = validate_device_name(name) {
+        return Err(anyhow!("invalid device {}: {}", device, e));
     }
     Ok((vendor.to_string(), class.to_string(), name.to_string()))
 }
+
 // ParseDevice tries to split a device name into vendor, class, and name.
 // If this fails, for instance in the case of unqualified device names,
 // ParseDevice returns an empty vendor and class together with name set
 // to the verbatim input.
 pub(crate) fn parse_device(device: &str) -> (&str, &str, &str) {
-    if device.is_empty() || device.chars().next().unwrap() == '/' {
+    if device.is_empty() || device.starts_with('/') {
         return ("", "", device);
     }
 
@@ -81,6 +83,7 @@ pub(crate) fn parse_device(device: &str) -> (&str, &str, &str) {
     }
     (vendor, class, name)
 }
+
 // ParseQualifier splits a device qualifier into vendor and class.
 // The syntax for a device qualifier is
 //
@@ -95,28 +98,33 @@ pub(crate) fn parse_qualifier(kind: &str) -> (&str, &str) {
     }
     (parts[0], parts[1])
 }
+
 // ValidateVendorName checks the validity of a vendor name.
 // A vendor name may contain the following ASCII characters:
 //   - upper- and lowercase letters ('A'-'Z', 'a'-'z')
 //   - digits ('0'-'9')
 //   - underscore, dash, and dot ('_', '-', and '.')
 pub(crate) fn validate_vendor_name(vendor: &str) -> Result<()> {
-    match validate_vendor_or_class_name(vendor) {
-        Err(e) => Err(anyhow!("invalid vendor. {}", e)),
-        _ => Ok(()),
+    if let Err(e) = validate_vendor_or_class_name(vendor) {
+        return Err(anyhow!("invalid vendor. {}", e))
     }
+
+    Ok(())
 }
+
 // ValidateClassName checks the validity of class name.
 // A class name may contain the following ASCII characters:
 //   - upper- and lowercase letters ('A'-'Z', 'a'-'z')
 //   - digits ('0'-'9')
 //   - underscore, dash, and dot ('_', '-', and '.')
 pub(crate) fn validate_class_name(class: &str) -> Result<()> {
-    match validate_vendor_or_class_name(class) {
-        Err(e) => Err(anyhow!("invalid class. {}", e)),
-        _ => Ok(()),
+    if let Err(e) =  validate_vendor_or_class_name(class) {
+        return Err(anyhow!("invalid class. {}", e));
     }
+
+    Ok(())
 }
+
 // validateVendorOrClassName checks the validity of vendor or class name.
 // A name may contain the following ASCII characters:
 //   - upper- and lowercase letters ('A'-'Z', 'a'-'z')
@@ -137,6 +145,7 @@ pub(crate) fn validate_vendor_or_class_name(name: &str) -> Result<()> {
     }
     Ok(())
 }
+
 // ValidateDeviceName checks the validity of a device name.
 // A device name may contain the following ASCII characters:
 //   - upper- and lowercase letters ('A'-'Z', 'a'-'z')

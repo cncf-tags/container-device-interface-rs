@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use crate::device::Device;
 use crate::spec::Spec;
-use crate::watch::Watch;
+//use crate::watch::Watch;
 use std::sync::{Arc, Mutex};
 
 // CacheOption is an option to change some aspect of default CDI behavior.
@@ -24,6 +24,7 @@ impl CacheOption for WithAutoRefresh {
     }
 }
 
+#[allow(dead_code)]
 pub struct Cache {
     spec_dirs: Vec<String>,
     specs: HashMap<String, Vec<Spec>>,
@@ -32,7 +33,7 @@ pub struct Cache {
     dir_errors: HashMap<String, Box<dyn std::error::Error + Send + Sync + 'static>>,
 
     auto_refresh: bool,
-    watch: Watch,
+    //watch: Watch,
 }
 
 impl Cache {
@@ -44,28 +45,30 @@ impl Cache {
             errors: HashMap::new(),
             dir_errors: HashMap::new(),
             auto_refresh: false,
-            watch: Watch::new(),
+            //watch: Watch::new(),
         }))
     }
+
     pub fn configure(&mut self, options: Vec<Box<dyn CacheOption>>) {
         for option in options {
             option.apply(self);
         }
     }
 
-    pub fn list_vendors(&self) -> Vec<String> {
+    pub fn list_vendors(&mut self) -> Vec<String> {
         let mut vendors: Vec<String> = Vec::new();
 
-        self.refresh_if_required(false);
+        let _ = self.refresh_if_required(false);
 
         for vendor in self.specs.keys() {
-            vendors.push(*vendor);
+            vendors.push(vendor.clone());
         }
         vendors.sort();
         vendors
     }
-    pub fn get_vendor_specs(&self, vendor: &str) -> Vec<Spec> {
-        self.refresh_if_required(false);
+
+    pub fn get_vendor_specs(&mut self, vendor: &str) -> Vec<Spec> {
+        let _ = self.refresh_if_required(false);
 
         match self.specs.get(vendor) {
             Some(specs) => specs.clone(),
@@ -81,7 +84,9 @@ impl Cache {
         // We need to refresh if
         // - it's forced by an explicit call to Refresh() in manual mode
         // - a missing Spec dir appears (added to watch) in auto-refresh mode
-        if force || (self.auto_refresh && self.watch.update(&mut self.dir_errors, vec![])) {
+        // TODO: Here it will be recoverd if watch is completed.
+        // if force || (self.auto_refresh && self.watch.update(&mut self.dir_errors, vec![])) {
+        if force || (self.auto_refresh) {
             self.refresh()?;
             return Ok(true);
         }

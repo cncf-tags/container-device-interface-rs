@@ -2,12 +2,11 @@ use crate::cache;
 use crate::device;
 use crate::spec;
 use anyhow::{Error, Result};
+use once_cell::sync::OnceCell;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-//use once_cell::sync::Lazy;
 use oci_spec::runtime as oci;
-use once_cell::sync::Lazy;
 
 // Registry keeps a cache of all CDI Specs installed or generated on
 // the host. Registry is the primary interface clients should use to
@@ -19,16 +18,16 @@ use once_cell::sync::Lazy;
 pub trait RegistryCache:
     RegistryResolver + RegistryRefresher + RegistryDeviceDB + RegistrySpecDB
 {
-    fn device_db(&self) -> Registry;
-    fn spec_db(&self) -> Registry;
+    fn device_db(&self) -> &Registry;
+    fn spec_db(&self) -> &Registry;
 }
 
 impl RegistryCache for Registry {
-    fn device_db(&self) -> Registry {
-        *self
+    fn device_db(&self) -> &Registry {
+        self
     }
-    fn spec_db(&self) -> Registry {
-        *self
+    fn spec_db(&self) -> &Registry {
+        self
     }
 }
 
@@ -50,7 +49,7 @@ impl RegistryCache for Registry {
 //
 // GetSpecDirErrors returns any errors related to the configured
 // Spec directories.
-trait RegistryRefresher {
+pub trait RegistryRefresher {
     //fn configure(&mut self, options: Vec<dyn CacheOption>) -> Result<(), Error>;
     //fn configure<T>(&mut self, option: T) where T: IntoIterator<Item = impl CacheOption>;
     fn configure(&self, options: Vec<Box<dyn cache::CacheOption>>);
@@ -84,7 +83,7 @@ impl RegistryRefresher for Registry {
 // InjectDevices takes an OCI Spec and injects into it a set of
 // CDI devices given by qualified name. It returns the names of
 // any unresolved devices and an error if injection fails.
-trait RegistryResolver {
+pub trait RegistryResolver {
     fn inject_devices(
         &self,
         spec: &oci::Spec,
@@ -95,8 +94,8 @@ trait RegistryResolver {
 impl RegistryResolver for Registry {
     fn inject_devices(
         &self,
-        spec: &oci::Spec,
-        device: Vec<String>,
+        _spec: &oci::Spec,
+        _device: Vec<String>,
     ) -> (Vec<String>, Result<(), Error>) {
         (vec![], Ok(()))
     }
@@ -109,13 +108,13 @@ impl RegistryResolver for Registry {
 //
 // ListDevices returns a slice with the names of qualified device
 // known/. The returned slice is sorted.
-trait RegistryDeviceDB {
+pub trait RegistryDeviceDB {
     fn get_device(&self, device: &str) -> device::Device;
     fn list_devices(&self) -> Vec<String>;
 }
 
 impl RegistryDeviceDB for Registry {
-    fn get_device(&self, device: &str) -> device::Device {
+    fn get_device(&self, _device: &str) -> device::Device {
         device::Device::new()
     }
     fn list_devices(&self) -> Vec<String> {
@@ -156,26 +155,25 @@ impl RegistrySpecDB for Registry {
     fn get_vendor_specs(&self, vendor: &str) -> Vec<spec::Spec> {
         self.cache.lock().unwrap().get_vendor_specs(vendor)
     }
-    fn get_spec_errors(&self, spec: &spec::Spec) -> Vec<Error> {
+    fn get_spec_errors(&self, _spec: &spec::Spec) -> Vec<Error> {
         vec![]
     }
-    fn write_spec(&self, raw: &spec::Spec, name: &str) -> Result<(), Error> {
+    fn write_spec(&self, _raw: &spec::Spec, _name: &str) -> Result<(), Error> {
         Ok(())
     }
 }
 
-struct Registry {
-    cache: Arc<Mutex<cache::Cache>>,
+pub struct Registry {
+    pub cache: Arc<Mutex<cache::Cache>>,
 }
 
-static REGISTRY: Lazy<Registry> = Lazy::new(|| Registry {
-    cache: cache::Cache::new(),
-});
+pub fn get_registry(options: Vec<Box<dyn cache::CacheOption>>) -> Option<Registry> {
+    let mut registry: OnceCell<Registry> = OnceCell::new();
+    registry.get_or_init(|| Registry {
+        cache: cache::Cache::new()
+    });
+    registry.get_mut().unwrap().configure(options);
+    let _ = registry.get_mut().unwrap().refresh();
 
-// GetRegistry returns the CDI registry. If any options are given, those
-// are applied to the registry.
-pub fn get_registry(options: Vec<Box<dyn cache::CacheOption>>) -> Registry {
-    REGISTRY.configure(options);
-    REGISTRY.refresh();
-    *REGISTRY
+    registry.take()
 }

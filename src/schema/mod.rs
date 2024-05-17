@@ -1,16 +1,16 @@
 use anyhow::Ok;
-use core::panic;
-use jsonschema::Draft;
-use jsonschema::JSONSchema;
-use serde_json::json;
-use serde_json::Value;
+// use core::panic;
+// use jsonschema::Draft;
+// use jsonschema::JSONSchema;
+// use serde_json::json;
+// use serde_json::Value;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 
-const SCHEMA_JSON: &'static str = include_str!("schema.json");
-const DEFS_JSON: &'static str = include_str!("defs.json");
+const _SCHEMA_JSON: &str = include_str!("schema.json");
+const _DEFS_JSON: &str = include_str!("defs.json");
 
-pub fn validate(schema: &jsonschema::JSONSchema, doc_data: &[u8]) -> Result<()> {
+pub fn validate(_schema: &jsonschema::JSONSchema, _doc_data: &[u8]) -> Result<()> {
     let mut schema_json: serde_json::Value = serde_json::from_str(include_str!("schema.json"))?;
     let defs_json: serde_json::Value = serde_json::from_str(include_str!("defs.json"))?;
 
