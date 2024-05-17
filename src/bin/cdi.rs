@@ -1,9 +1,7 @@
- extern crate cdi;
- //use clap::{Arg, Subcommand};
-
+extern crate cdi;
+//use clap::{Arg, Subcommand};
 
 fn main() {
 
-
-	// Here, you can use your library's functions or structs.
+    // Here, you can use your library's functions or structs.
 }

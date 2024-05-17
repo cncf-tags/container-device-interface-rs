@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 // QualifiedName returns the qualified name for a device.
 // The syntax for a qualified device names is
@@ -21,12 +21,11 @@ pub(crate) fn is_qualified_name(name: &str) -> bool {
         Ok(_) => {
             print!("{} is a qualified name\n", name);
             true
-        },
+        }
         Err(e) => {
             println!("{} is not a qualified name, {}\n", name, e);
             false
-        },
-
+        }
     }
 }
 // ParseQualifiedName splits a qualified name into device vendor, class,
@@ -34,7 +33,9 @@ pub(crate) fn is_qualified_name(name: &str) -> bool {
 // of the split components fail to pass syntax validation, vendor and
 // class are returned as empty, together with the verbatim input as the
 // name and an error describing the reason for failure.
-pub(crate) fn parse_qualified_name(device: &str) -> Result<(String, String, String), anyhow::Error> {
+pub(crate) fn parse_qualified_name(
+    device: &str,
+) -> Result<(String, String, String), anyhow::Error> {
     let (vendor, class, name) = parse_device(device);
     if vendor.is_empty() {
         return Err(anyhow!("unqualified device {}, missing vendor", device));
@@ -128,8 +129,11 @@ pub(crate) fn validate_vendor_or_class_name(name: &str) -> Result<()> {
     if !name.chars().next().unwrap_or_default().is_alphabetic() {
         return Err(anyhow!("name should start with a letter"));
     }
-    if let Some(c) = name.chars().find(|&c| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.') {
-    	return Err(anyhow!("invalid character '{}' in name {}", c, name));
+    if let Some(c) = name
+        .chars()
+        .find(|&c| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.')
+    {
+        return Err(anyhow!("invalid character '{}' in name {}", c, name));
     }
     Ok(())
 }
@@ -139,97 +143,97 @@ pub(crate) fn validate_vendor_or_class_name(name: &str) -> Result<()> {
 //   - digits ('0'-'9')
 //   - underscore, dash, dot, colon ('_', '-', '.', ':')
 pub(crate) fn validate_device_name(name: &str) -> Result<()> {
-	if name.is_empty() {
-	    return Err(anyhow!("empty name"));
-	}
-	if let Some(c) = name.chars().find(|&c| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.' && c != ':') {
-	    return Err(anyhow!("invalid character '{}' in device name {}", c, name));
-	}
-	Ok(())
+    if name.is_empty() {
+        return Err(anyhow!("empty name"));
     }
-
-
+    if let Some(c) = name
+        .chars()
+        .find(|&c| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.' && c != ':')
+    {
+        return Err(anyhow!("invalid character '{}' in device name {}", c, name));
+    }
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
 
-	use crate::parser;
-	
-	#[test]
+    use crate::parser;
 
-	fn qualified_name() {
-		let vendor = "nvidia.com";
-		let class = "gpu";
-		let name = "0";
-		let device = parser::qualified_name(vendor, class, name);
-		assert_eq!(device, "nvidia.com/gpu=0");
-		assert_eq!(parser::is_qualified_name(&device), true);
-	}
+    #[test]
 
-	#[test]
-	fn parse_qualified_name() {
-		let device = "nvidia.com/gpu=0";
-		match parser::parse_qualified_name(device) {
-			Ok((vendor, class, name)) => {
-				assert_eq!(vendor, "nvidia.com");
-				assert_eq!(class, "gpu");
-				assert_eq!(name, "0");
-			},
-			Err(e) => {
-				println!("error: {}", e);
-			}
-		}
-	}
+    fn qualified_name() {
+        let vendor = "nvidia.com";
+        let class = "gpu";
+        let name = "0";
+        let device = parser::qualified_name(vendor, class, name);
+        assert_eq!(device, "nvidia.com/gpu=0");
+        assert_eq!(parser::is_qualified_name(&device), true);
+    }
 
-	#[test]
-	fn parse_device() {
-		let device = "nvidia.com/gpu=0";
-		let (vendor, class, name) = parser::parse_device(device);
-		assert_eq!(vendor, "nvidia.com");
-		assert_eq!(class, "gpu");
-		assert_eq!(name, "0");
-	}
+    #[test]
+    fn parse_qualified_name() {
+        let device = "nvidia.com/gpu=0";
+        match parser::parse_qualified_name(device) {
+            Ok((vendor, class, name)) => {
+                assert_eq!(vendor, "nvidia.com");
+                assert_eq!(class, "gpu");
+                assert_eq!(name, "0");
+            }
+            Err(e) => {
+                println!("error: {}", e);
+            }
+        }
+    }
 
-	#[test]
-	fn parse_qualifier() {
-		let qualifier = "nvidia.com/gpu";
-		let (vendor, class) = parser::parse_qualifier(qualifier);
-		assert_eq!(vendor, "nvidia.com");
-		assert_eq!(class, "gpu");
-	}
+    #[test]
+    fn parse_device() {
+        let device = "nvidia.com/gpu=0";
+        let (vendor, class, name) = parser::parse_device(device);
+        assert_eq!(vendor, "nvidia.com");
+        assert_eq!(class, "gpu");
+        assert_eq!(name, "0");
+    }
 
-	#[test] 
-	fn validate_vendor_name() {
-		let vendor = "nvidia.com";
-		assert!(parser::validate_vendor_name(vendor).is_ok());
+    #[test]
+    fn parse_qualifier() {
+        let qualifier = "nvidia.com/gpu";
+        let (vendor, class) = parser::parse_qualifier(qualifier);
+        assert_eq!(vendor, "nvidia.com");
+        assert_eq!(class, "gpu");
+    }
 
-		let vendor = "nvi((dia";
-		assert!(parser::validate_vendor_name(vendor).is_err());
-	}
-	#[test]
-	fn validate_class_name() {
-		let class = "gpu";
-		assert!(parser::validate_class_name(class).is_ok());
+    #[test]
+    fn validate_vendor_name() {
+        let vendor = "nvidia.com";
+        assert!(parser::validate_vendor_name(vendor).is_ok());
 
-		let class = "g(pu";
-		assert!(parser::validate_class_name(class).is_err());
-	}
+        let vendor = "nvi((dia";
+        assert!(parser::validate_vendor_name(vendor).is_err());
+    }
+    #[test]
+    fn validate_class_name() {
+        let class = "gpu";
+        assert!(parser::validate_class_name(class).is_ok());
 
-	#[test] 
-	fn validate_device_name() {
-		let name = "0";
-		assert!(parser::validate_device_name(name).is_ok());
+        let class = "g(pu";
+        assert!(parser::validate_class_name(class).is_err());
+    }
 
-		let name = "0(";
-		assert!(parser::validate_device_name(name).is_err());
-	}
-	#[test]
-	fn validate_vendor_or_class_name() {
-		let name = "nvidia.com";
-		assert!(parser::validate_vendor_or_class_name(name).is_ok());
+    #[test]
+    fn validate_device_name() {
+        let name = "0";
+        assert!(parser::validate_device_name(name).is_ok());
 
-		let name = "nvi((dia.com";
-		assert!(parser::validate_vendor_or_class_name(name).is_err());
-	}
+        let name = "0(";
+        assert!(parser::validate_device_name(name).is_err());
+    }
+    #[test]
+    fn validate_vendor_or_class_name() {
+        let name = "nvidia.com";
+        assert!(parser::validate_vendor_or_class_name(name).is_ok());
 
+        let name = "nvi((dia.com";
+        assert!(parser::validate_vendor_or_class_name(name).is_err());
+    }
 }
