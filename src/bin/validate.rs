@@ -1,10 +1,10 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use clap::{App, Arg};
 use std::io::{self, Read};
 
 extern crate cdi;
 
-use cdi::schema;
+// use cdi::schema;
 
 fn main() -> Result<()> {
     let matches = App::new("validate")
@@ -44,14 +44,16 @@ fn main() -> Result<()> {
 
     let document = matches.value_of("document").unwrap();
 
-    let doc_data = if document == "-" {
+    let _doc_data = if document == "-" {
         println!("Reading from <stdin>...");
         let mut buffer = Vec::new();
         io::stdin().read_to_end(&mut buffer)?;
         buffer
     } else {
-        std::fs::read(&document)?
+        std::fs::read(document)?
     };
 
     //schema::validate(schema_file, &doc_data)
+
+    Ok(())
 }

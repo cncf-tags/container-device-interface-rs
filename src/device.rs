@@ -1,4 +1,5 @@
 // Device represents a CDI device of a Spec.
+#[derive(Default)]
 pub struct Device {
     //*cdi.Device
     //spec *Spec
