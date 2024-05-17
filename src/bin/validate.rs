@@ -1,12 +1,10 @@
-
 use anyhow::{anyhow, Result};
 use clap::{App, Arg};
 use std::io::{self, Read};
 
-
 extern crate cdi;
 
-use cdi::schema as schema;
+use cdi::schema;
 
 fn main() -> Result<()> {
     let matches = App::new("validate")
@@ -56,5 +54,4 @@ fn main() -> Result<()> {
     };
 
     //schema::validate(schema_file, &doc_data)
-
 }
