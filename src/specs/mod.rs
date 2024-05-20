@@ -1,139 +1,149 @@
 
+use std::collections::BTreeMap;
+
+use libc::mode_t;
+
+use serde::{Deserialize, Serialize};
+
 // CurrentVersion is the current version of the Spec.
+#[allow(dead_code)]
 const CURRENT_VERSION: &str = "0.7.0";
 
 // Spec is the base configuration for CDI
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash, Deserialize, Serialize)]
 pub struct Spec {
     #[serde(rename = "cdiVersion")]
-    version: String,
+    pub(crate) version: String,
 
     #[serde(rename = "kind")]
-    kind: String,
+    pub(crate) kind: String,
 
-    #[serde(rename = "annotations", default, skip_serializing_if = "std::collections::HashMap::is_empty")]
-    annotations: std::collections::HashMap<String, String>,
+    #[serde(rename = "annotations", default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) annotations: BTreeMap<String, String>,
 
     #[serde(rename = "devices")]
-    devices: Vec<Device>,
+    pub(crate) devices: Vec<Device>,
 
     #[serde(rename = "containerEdits", skip_serializing_if = "Option::is_none")]
-    container_edits: Option<ContainerEdits>,
+    pub(crate) container_edits: Option<ContainerEdits>,
 }
 
 // Device is a "Device" a container runtime can add to a container
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash, Deserialize, Serialize)]
 pub struct Device {
     #[serde(rename = "name")]
-    name: String,
+    pub(crate) name: String,
 
-    #[serde(rename = "annotations", default, skip_serializing_if = "std::collections::HashMap::is_empty")]
-    annotations: std::collections::HashMap<String, String>,
+    #[serde(rename = "annotations", default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) annotations: BTreeMap<String, String>,
 
     #[serde(rename = "containerEdits")]
-    container_edits: ContainerEdits,
+    pub(crate) container_edits: ContainerEdits,
 }
 
 // ContainerEdits are edits a container runtime must make to the OCI spec to expose the device.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash, Deserialize, Serialize)]
 pub struct ContainerEdits {
-    #[serde(rename = "env", default, skip_serializing_if = "Vec::is_empty")]
-    env: Vec<String>,
+    #[serde(rename = "env", skip_serializing_if = "Option::is_none")]
+    pub(crate) env: Option<Vec<String>>,
 
-    #[serde(rename = "deviceNodes", default, skip_serializing_if = "Vec::is_empty")]
-    device_nodes: Vec<DeviceNode>,
+    #[serde(rename = "deviceNodes", skip_serializing_if = "Option::is_none")]
+    pub(crate) device_nodes: Option<Vec<DeviceNode>>,
 
-    #[serde(rename = "hooks", default, skip_serializing_if = "Vec::is_empty")]
-    hooks: Vec<Hook>,
+    #[serde(rename = "hooks", skip_serializing_if = "Option::is_none")]
+    pub(crate) hooks: Option<Vec<Hook>>,
 
-    #[serde(rename = "mounts", default, skip_serializing_if = "Vec::is_empty")]
-    mounts: Vec<Mount>,
+    #[serde(rename = "mounts", skip_serializing_if = "Option::is_none")]
+    pub(crate) mounts: Option<Vec<Mount>>,
 
     #[serde(rename = "intelRdt", skip_serializing_if = "Option::is_none")]
-    intel_rdt: Option<IntelRdt>,
+    pub(crate) intel_rdt: Option<IntelRdt>,
 
-    #[serde(rename = "additionalGids", default, skip_serializing_if = "Vec::is_empty")]
-    additional_gids: Vec<u32>,
+    #[serde(rename = "additionalGids", skip_serializing_if = "Option::is_none")]
+    pub(crate) additional_gids: Option<Vec<u32>>,
 }
 
 // DeviceNode represents a device node that needs to be added to the OCI spec.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash, Deserialize, Serialize)]
 pub struct DeviceNode {
     #[serde(rename = "path")]
-    path: String,
+    pub(crate) path: String,
+
+    #[serde(rename = "hostPath", skip_serializing_if = "Option::is_none")]
+    pub(crate) host_path: Option<String>,
 
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    type_: Option<String>,
+    pub(crate) r#type: Option<String>,
 
-    #[serde(rename = "major", skip_serializing_if = "Option::is_none")]
-    major: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub major: Option<i64>,
 
-    #[serde(rename = "minor", skip_serializing_if = "Option::is_none")]
-    minor: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minor: Option<i64>,
 
     #[serde(rename = "fileMode", skip_serializing_if = "Option::is_none")]
-    file_mode: Option<PermissionsExt>,
+    pub file_mode: Option<mode_t>,
 
     #[serde(rename = "permissions", skip_serializing_if = "Option::is_none")]
-    permissions: Option<String>,
+    pub permissions: Option<String>,
 
-    #[serde(rename = "uid", skip_serializing_if = "Option::is_none")]
-    uid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<u32>,
 
-    #[serde(rename = "gid", skip_serializing_if = "Option::is_none")]
-    gid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gid: Option<u32>,
 }
 
 // Mount represents a mount that needs to be added to the OCI spec.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash, Deserialize, Serialize)]
 pub struct Mount {
     #[serde(rename = "hostPath")]
-    host_path: String,
+    pub(crate) host_path: String,
 
     #[serde(rename = "containerPath")]
-    container_path: String,
-
-    #[serde(rename = "options", default, skip_serializing_if = "Vec::is_empty")]
-    options: Vec<String>,
+    pub(crate) container_path: String,
 
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    mount_type: Option<String>,
+    pub(crate) r#type: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) options: Option<Vec<String>>,
 }
 
 // Hook represents a hook that needs to be added to the OCI spec.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash, Deserialize, Serialize)]
 pub struct Hook {
     #[serde(rename = "hookName")]
-    hook_name: String,
+    pub(crate) hook_name: String,
 
     #[serde(rename = "path")]
-    path: String,
+    pub(crate) path: String,
 
-    #[serde(rename = "args", default, skip_serializing_if = "Vec::is_empty")]
-    args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) args: Option<Vec<String>>,
 
-    #[serde(rename = "env", default, skip_serializing_if = "Vec::is_empty")]
-    env: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) env: Option<Vec<String>>,
 
     #[serde(rename = "timeout", skip_serializing_if = "Option::is_none")]
-    timeout: Option<i32>,
+    pub(crate) timeout: Option<i64>,
 }
 
 // IntelRdt describes the Linux IntelRdt parameters to set in the OCI spec.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash, Deserialize, Serialize)]
 pub struct IntelRdt {
     #[serde(rename = "closID", skip_serializing_if = "Option::is_none")]
-    clos_id: Option<String>,
+    pub(crate) clos_id: Option<String>,
 
     #[serde(rename = "l3CacheSchema", skip_serializing_if = "Option::is_none")]
-    l3_cache_schema: Option<String>,
+    pub(crate) l3_cache_schema: Option<String>,
 
     #[serde(rename = "memBwSchema", skip_serializing_if = "Option::is_none")]
-    mem_bw_schema: Option<String>,
+    pub(crate) mem_bw_schema: Option<String>,
 
-    #[serde(rename = "enableCMT")]
-    enable_cmt: bool,
+    #[serde(default, rename = "enableCMT")]
+    pub(crate) enable_cmt: bool,
 
-    #[serde(rename = "enableMBM")]
-    enable_mbm: bool,
+    #[serde(default, rename = "enableMBM")]
+    pub(crate) enable_mbm: bool,
 }

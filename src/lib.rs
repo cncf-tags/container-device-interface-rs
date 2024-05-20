@@ -1,5 +1,6 @@
 use cache::CacheOption;
 
+pub mod specs;
 pub mod annotations;
 pub mod cache;
 pub mod device;
