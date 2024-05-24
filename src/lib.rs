@@ -2,6 +2,7 @@ use cache::CacheOption;
 
 pub mod annotations;
 pub mod cache;
+pub mod container_edits;
 pub mod device;
 pub mod parser;
 pub mod registry;
