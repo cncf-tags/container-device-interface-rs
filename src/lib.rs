@@ -8,6 +8,7 @@ pub mod registry;
 pub mod schema;
 pub mod spec;
 pub mod specs;
+pub mod utils;
 pub mod validations;
 
 //pub mod watch;
