@@ -4,6 +4,7 @@ use anyhow::{anyhow, Context, Error, Result};
 use oci_spec::runtime as oci;
 
 use crate::{
+    container_edits_unix::{device_info_from_path, DeviceType},
     specs::config::{
         ContainerEdits as CDIContainerEdits, DeviceNode as CDIDeviceNode, Hook as CDIHook,
         IntelRdt as CDIIntelRdt, Mount as CDIMount,
@@ -124,6 +125,46 @@ impl Validate for ContainerEdits {
 // DeviceNode is a CDI Spec DeviceNode wrapper, used for validating DeviceNodes.
 pub struct DeviceNode {
     pub node: CDIDeviceNode,
+}
+
+impl DeviceNode {
+    pub fn fill_missing_info(&mut self) -> Result<()> {
+        let host_path = self
+            .node
+            .host_path
+            .as_deref()
+            .unwrap_or_else(|| &self.node.path);
+
+        if let Some(device_type) = self.node.r#type.as_deref() {
+            if self.node.major.is_some() || device_type == DeviceType::Fifo.to_string() {
+                return Ok(());
+            }
+        }
+
+        let (dev_type, major, minor) = device_info_from_path(host_path)?;
+        match self.node.r#type.as_deref() {
+            None => self.node.r#type = Some(dev_type),
+            Some(node_type) if node_type != dev_type => {
+                return Err(anyhow!(
+                    "CDI device ({}, {}), host type mismatch ({}, {})",
+                    self.node.path,
+                    host_path,
+                    node_type,
+                    dev_type
+                ));
+            }
+            _ => {}
+        }
+
+        if self.node.major.is_none()
+            && self.node.r#type.as_deref() != Some(&DeviceType::Fifo.to_string())
+        {
+            self.node.major = Some(major);
+            self.node.minor = Some(minor);
+        }
+
+        Ok(())
+    }
 }
 
 impl Validate for DeviceNode {
