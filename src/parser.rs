@@ -106,7 +106,7 @@ pub(crate) fn parse_qualifier(kind: &str) -> (&str, &str) {
 //   - underscore, dash, and dot ('_', '-', and '.')
 pub(crate) fn validate_vendor_name(vendor: &str) -> Result<()> {
     if let Err(e) = validate_vendor_or_class_name(vendor) {
-        return Err(anyhow!("invalid vendor. {}", e))
+        return Err(anyhow!("invalid vendor. {}", e));
     }
 
     Ok(())
@@ -118,7 +118,7 @@ pub(crate) fn validate_vendor_name(vendor: &str) -> Result<()> {
 //   - digits ('0'-'9')
 //   - underscore, dash, and dot ('_', '-', and '.')
 pub(crate) fn validate_class_name(class: &str) -> Result<()> {
-    if let Err(e) =  validate_vendor_or_class_name(class) {
+    if let Err(e) = validate_vendor_or_class_name(class) {
         return Err(anyhow!("invalid class. {}", e));
     }
 
