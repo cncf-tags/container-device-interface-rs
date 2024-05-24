@@ -4,9 +4,9 @@ use crate::spec;
 use anyhow::{Error, Result};
 use once_cell::sync::OnceCell;
 
+use oci_spec::runtime as oci;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use oci_spec::runtime as oci;
 
 // Registry keeps a cache of all CDI Specs installed or generated on
 // the host. Registry is the primary interface clients should use to
@@ -170,7 +170,7 @@ pub struct Registry {
 pub fn get_registry(options: Vec<Box<dyn cache::CacheOption>>) -> Option<Registry> {
     let mut registry: OnceCell<Registry> = OnceCell::new();
     registry.get_or_init(|| Registry {
-        cache: cache::Cache::new()
+        cache: cache::Cache::new(),
     });
     registry.get_mut().unwrap().configure(options);
     let _ = registry.get_mut().unwrap().refresh();

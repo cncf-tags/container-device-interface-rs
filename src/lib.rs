@@ -1,6 +1,5 @@
 use cache::CacheOption;
 
-pub mod specs;
 pub mod annotations;
 pub mod cache;
 pub mod device;
@@ -8,6 +7,10 @@ pub mod parser;
 pub mod registry;
 pub mod schema;
 pub mod spec;
+pub mod specs;
+pub mod utils;
+pub mod validations;
+
 //pub mod watch;
 use crate::registry::RegistryCache;
 use crate::registry::RegistrySpecDB;
