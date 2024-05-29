@@ -1,7 +1,25 @@
 extern crate cdi;
-//use clap::{Arg, Subcommand};
+mod cdi_ops;
 
-fn main() {
+use anyhow::Result;
+use clap::Parser;
 
-    // Here, you can use your library's functions or structs.
+use cdi_ops::{
+    args::{CdiCli, Commands},
+    handler::{handle_cdi_devices, handle_cdi_inject},
+};
+
+fn main() -> Result<()> {
+    let cli = CdiCli::parse();
+
+    match &cli.command {
+        Commands::Devices(args) => {
+            handle_cdi_devices(args)?;
+        }
+        Commands::Inject(args) => {
+            handle_cdi_inject(args)?;
+        } // TODO: to support more command here
+    }
+
+    Ok(())
 }
