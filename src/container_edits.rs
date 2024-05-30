@@ -1,10 +1,11 @@
 use std::{collections::HashSet, str::FromStr};
 
 use anyhow::{anyhow, Context, Error, Result};
-use oci_spec::runtime as oci;
+use oci_spec::runtime::{self as oci, LinuxDeviceType};
 
 use crate::{
     container_edits_unix::{device_info_from_path, DeviceType},
+    generate::config::Generator,
     specs::config::{
         ContainerEdits as CDIContainerEdits, DeviceNode as CDIDeviceNode, Hook as CDIHook,
         IntelRdt as CDIIntelRdt, Mount as CDIMount,
@@ -37,8 +38,6 @@ pub struct ContainerEdits {
 }
 
 impl ContainerEdits {
-    // Apply edits to the given OCI Spec. Updates the OCI Spec in place.
-    // Returns an error if the update fails.
     pub fn new() -> Self {
         Self {
             container_edits: CDIContainerEdits {
@@ -47,13 +46,106 @@ impl ContainerEdits {
         }
     }
 
-    pub fn apply(&mut self, _oci_spec: &mut oci::Spec) -> Result<()> {
-        // TODO: it depends on Generator related to oci spec, however, there's no existing
-        // Generator for us and the Generator depends on the MutGetters attribute on oci-spec-rs/runtime.
-        // It will be implemented once the PR https://github.com/containers/oci-spec-rs/pull/166 merged
+    // apply edits to the given OCI Spec. Updates the OCI Spec in place.
+    // Returns an error if the update fails.
+    pub fn apply(&mut self, oci_spec: &mut oci::Spec) -> Result<()> {
+        let mut spec_gen: Generator = Generator::spec_gen(Some(oci_spec.clone()));
+
+        if let Some(envs) = &self.container_edits.env {
+            if !envs.is_empty() {
+                spec_gen.add_multiple_process_env(envs);
+            }
+        }
+
+        if let Some(device_nodes) = &self.container_edits.device_nodes {
+            for d in device_nodes {
+                let mut dn: DeviceNode = DeviceNode { node: d.clone() };
+
+                dn.fill_missing_info()
+                    .context("filling missing info failed.")?;
+
+                let mut dev = d.to_oci()?;
+                if let Some(process) = oci_spec.process_mut() {
+                    let user = process.user_mut();
+
+                    let gid = user.gid();
+                    if gid > 0 {
+                        dev.set_gid(Some(gid));
+                    }
+
+                    let uid = user.uid();
+                    if uid > 0 {
+                        dev.set_gid(Some(uid));
+                    }
+                }
+
+                let dev_typ = dev.typ();
+                let typs = [LinuxDeviceType::B, LinuxDeviceType::C];
+                if typs.contains(&dev_typ) {
+                    let perms = "rwm".to_owned();
+                    let dev_access = if let Some(permissions) = &d.permissions {
+                        permissions
+                    } else {
+                        &perms
+                    };
+
+                    let major = dev.major();
+                    let minor = dev.minor();
+                    spec_gen.add_linux_resources_device(
+                        true,
+                        dev_typ,
+                        Some(major),
+                        Some(minor),
+                        Some(dev_access.clone()),
+                    );
+                }
+
+                spec_gen.remove_device(&dev.path().display().to_string());
+                spec_gen.add_device(dev.clone());
+            }
+        }
+
+        if let Some(mounts) = &self.container_edits.mounts {
+            for m in mounts {
+                spec_gen.remove_mount(&m.container_path);
+                spec_gen.add_mount(m.to_oci()?);
+            }
+        }
+
+        if let Some(hooks) = &self.container_edits.hooks {
+            for h in hooks {
+                let hook_name = HookName::from_str(&h.hook_name)
+                    .context(format!("no such hook with name: {:?}", &h.hook_name))?;
+                match hook_name {
+                    HookName::Prestart => spec_gen.add_prestart_hook(h.to_oci()?),
+                    HookName::CreateRuntime => spec_gen.add_createruntime_hook(h.to_oci()?),
+                    HookName::CreateContainer => spec_gen.add_createcontainer_hook(h.to_oci()?),
+                    HookName::StartContainer => spec_gen.add_startcontainer_hook(h.to_oci()?),
+                    HookName::Poststart => spec_gen.add_poststart_hook(h.to_oci()?),
+                    HookName::Poststop => spec_gen.add_poststop_hook(h.to_oci()?),
+                }
+            }
+        }
+
+        if let Some(intel_rdt) = &self.container_edits.intel_rdt {
+            if let Some(clos_id) = &intel_rdt.clos_id {
+                spec_gen.set_linux_intel_rdt_clos_id(clos_id.to_string());
+                // TODO: spec.Linux.IntelRdt = e.IntelRdt.ToOCI()
+            }
+        }
+
+        if let Some(additional_gids) = &self.container_edits.additional_gids {
+            for gid in additional_gids {
+                if *gid > 0 {
+                    spec_gen.add_process_additional_gid(*gid);
+                }
+            }
+        }
+
         Ok(())
     }
 
+    // append other edits into this one.
     pub fn append(&mut self, o: ContainerEdits) -> Self {
         let intel_rdt = if o.container_edits.intel_rdt.is_some() {
             o.container_edits.intel_rdt
@@ -82,6 +174,7 @@ impl ContainerEdits {
     }
 }
 
+// Validate container edits.
 impl Validate for ContainerEdits {
     fn validate(&self) -> Result<()> {
         if let Some(envs) = &self.container_edits.env {
