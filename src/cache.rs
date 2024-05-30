@@ -26,7 +26,7 @@ impl CacheOption for WithAutoRefresh {
 
 #[allow(dead_code)]
 pub struct Cache {
-    spec_dirs: Vec<String>,
+    pub spec_dirs: Vec<String>,
     specs: HashMap<String, Vec<Spec>>,
     devices: HashMap<String, Device>,
     errors: HashMap<String, Vec<Box<dyn std::error::Error + Send + Sync + 'static>>>,
