@@ -10,6 +10,7 @@ pub mod parser;
 pub mod registry;
 pub mod schema;
 pub mod spec;
+pub mod spec_dirs;
 pub mod specs;
 pub mod utils;
 pub mod validations;

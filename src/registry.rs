@@ -170,7 +170,7 @@ pub struct Registry {
 pub fn get_registry(options: Vec<Box<dyn cache::CacheOption>>) -> Option<Registry> {
     let mut registry: OnceCell<Registry> = OnceCell::new();
     registry.get_or_init(|| Registry {
-        cache: cache::Cache::new(),
+        cache: Arc::new(Mutex::new(cache::Cache::default())),
     });
     registry.get_mut().unwrap().configure(options);
     let _ = registry.get_mut().unwrap().refresh();
