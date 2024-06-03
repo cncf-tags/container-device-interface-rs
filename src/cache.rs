@@ -3,12 +3,12 @@ use std::{
     collections::{HashMap, HashSet},
     error::Error,
     fmt,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex},
 };
 
 use anyhow::Result;
+
 use oci_spec::runtime as oci;
-use once_cell::sync::Lazy;
 
 use crate::{
     //watch::Watch,
@@ -17,15 +17,6 @@ use crate::{
     spec::Spec,
     spec_dirs::{convert_errors, scan_spec_dirs, with_spec_dirs, SpecError, DEFAULT_SPEC_DIRS},
 };
-
-static CDI_REGISTRY: Lazy<Arc<Mutex<Cache>>> = Lazy::new(|| Arc::new(Mutex::new(Cache::default())));
-
-pub fn get_default_cache(options: Vec<Box<dyn CacheOption>>) -> MutexGuard<'static, Cache> {
-    let mut cache = CDI_REGISTRY.lock().unwrap();
-    *cache = Cache::new_cache(options);
-
-    cache
-}
 
 // Define custom errors if not already defined
 #[derive(Debug)]
@@ -88,6 +79,20 @@ pub struct Cache {
     //watch: Watch,
 }
 
+pub fn new_cache(options: Vec<Arc<dyn CacheOption>>) -> Arc<Mutex<Cache>> {
+    let cache = Arc::new(Mutex::new(Cache::default()));
+
+    {
+        let mut c = cache.lock().unwrap();
+
+        with_spec_dirs(&DEFAULT_SPEC_DIRS)(&mut c);
+        c.configure(options);
+        let _ = c.refresh();
+    } // MutexGuard `c` is dropped here
+
+    cache
+}
+
 impl Cache {
     pub fn new(
         spec_dirs: Vec<String>,
@@ -105,17 +110,7 @@ impl Cache {
         }
     }
 
-    pub fn new_cache(options: Vec<Box<dyn CacheOption>>) -> Cache {
-        let mut cache = Cache::default();
-
-        with_spec_dirs(&DEFAULT_SPEC_DIRS)(&mut cache);
-        cache.configure(options);
-        let _ = cache.refresh();
-
-        cache
-    }
-
-    pub fn configure(&mut self, options: Vec<Box<dyn CacheOption>>) {
+    pub fn configure(&mut self, options: Vec<Arc<dyn CacheOption>>) {
         for option in options {
             option.apply(self);
         }
@@ -135,6 +130,13 @@ impl Cache {
         for device in self.specs.keys() {
             devices.push(device.clone());
         }
+        devices.sort();
+        devices
+    }
+    pub fn list_devices(&mut self) -> Vec<String> {
+        let _ = self.refresh_if_required(false);
+
+        let mut devices: Vec<String> = self.devices.keys().cloned().collect();
         devices.sort();
         devices
     }
@@ -300,5 +302,10 @@ impl Cache {
         }
 
         Ok(Vec::new())
+    }
+
+    pub fn get_errors(&self) -> HashMap<String, Vec<anyhow::Error>> {
+        // Return errors if any
+        HashMap::new()
     }
 }

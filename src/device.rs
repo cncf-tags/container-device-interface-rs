@@ -14,7 +14,7 @@ use crate::{
 // Device represents a CDI device of a Spec.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Device {
-    cdi_device: CDIDevice,
+    pub cdi_device: CDIDevice,
     cdi_spec: Spec,
 }
 
@@ -24,6 +24,23 @@ impl Default for Device {
     }
 }
 
+// new_device creates a new Device, associate it with the given Spec.
+pub fn new_device(spec: &Spec, device: &CDIDevice) -> Result<Device> {
+    let device = Device {
+        cdi_device: device.clone(),
+        cdi_spec: spec.clone(),
+    };
+
+    if let Err(e) = device.validate() {
+        return Err(anyhow!(
+            "device validated failed with error: {:?}",
+            e.to_string()
+        ));
+    }
+
+    Ok(device)
+}
+
 impl Device {
     // new returns a default Device
     pub fn new() -> Self {
@@ -31,23 +48,6 @@ impl Device {
             cdi_device: Default::default(),
             cdi_spec: Default::default(),
         }
-    }
-
-    // new_device creates a new Device, associate it with the given Spec.
-    pub fn new_device(spec: Spec, device: CDIDevice) -> Result<Device> {
-        let device = Device {
-            cdi_device: device,
-            cdi_spec: spec,
-        };
-
-        if let Err(e) = device.validate() {
-            return Err(anyhow!(
-                "device validated failed with error: {:?}",
-                e.to_string()
-            ));
-        }
-
-        Ok(device)
     }
 
     // get_spec returns the Spec this device is defined in.
