@@ -1,17 +1,16 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use cdi::default_cache::get_default_cache;
 use cdi::device::Device;
+
+use crate::cdi_ops::{api::cdi_inject_devices, utils::read_oci_spec};
 
 use super::args::{DevicesArgs, InjectArgs};
 use super::format::{choose_format, indent, marshal_object};
 
 pub fn handle_cdi_inject(args: &InjectArgs) -> Result<()> {
-    println!("{:?}", args.oci_spec);
-    println!("{:?}", args.cdi_devices);
-
-    // TODO: add complete work later.
-    // let oci_spec = &mut read_oci_spec(&args.oci_spec)?;
-    // cdi_inject_devices(oci_spec, args.cdi_devices.clone()).context("cdi inject devices failed")?;
+    let oci_spec = &mut read_oci_spec(&args.oci_spec)?;
+    cdi_inject_devices(oci_spec, args.cdi_devices.clone(), &args.format)
+        .context("cdi inject devices failed")?;
 
     Ok(())
 }

@@ -46,6 +46,12 @@ pub fn inject_devices(
     cache.inject_devices(Some(oci_spec), devices)
 }
 
+pub fn list_devices() -> Vec<String> {
+    let cache = get_default_cache();
+    let mut cache = cache.lock().unwrap();
+    cache.list_devices()
+}
+
 pub fn get_errors() -> HashMap<String, Vec<anyhow::Error>> {
     let cache = get_default_cache();
     let cache = cache.lock().unwrap();
