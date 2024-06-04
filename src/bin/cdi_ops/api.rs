@@ -15,7 +15,7 @@ pub fn cdi_inject_devices(
     }
 
     println!("Updated OCI Spec:");
-    println!("{:?}", marshal_object(2, oci_spec, format));
+    print!("{}", marshal_object(2, oci_spec, format));
 
     Ok(())
 }

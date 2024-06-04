@@ -2,7 +2,7 @@ use serde::Serialize;
 use serde_json;
 use serde_yaml;
 use std::path::Path;
-
+use std::fmt::Write;
 use std::error::Error;
 
 pub fn choose_format(format: &str, path: &str) -> String {
@@ -28,9 +28,7 @@ pub fn marshal_object<T: Serialize>(level: usize, obj: &T, format: &str) -> Stri
         Ok(data) => {
             let mut out = String::new();
             for line in data.lines() {
-                out.push_str(&indent(level));
-                out.push_str(line);
-                out.push('\n');
+		writeln!(out, "{}{}", &indent(level), line).unwrap();
             }
             out
         }
