@@ -3,10 +3,20 @@ use std::{collections::BTreeMap, fs::File, path::PathBuf};
 use anyhow::{anyhow, Context, Result};
 use oci_spec::runtime as oci;
 use path_clean::clean;
+use semver::Version;
 
 use crate::{
-    container_edits::ContainerEdits, device::Device, parser::parse_qualifier,
-    specs::config::Spec as CDISpec, utils::is_cdi_spec,
+    container_edits::ContainerEdits,
+    container_edits::Validate,
+    device::new_device,
+    device::Device,
+    internal::validation::validate::validate_spec_annotations,
+    parser::parse_qualifier,
+    parser::validate_class_name,
+    parser::validate_vendor_name,
+    specs::config::Spec as CDISpec,
+    utils::is_cdi_spec,
+    version::{minimum_required_version, VALID_SPEC_VERSIONS},
 };
 
 const DEFAULT_SPEC_EXT_SUFFIX: &str = ".yaml";
@@ -19,7 +29,7 @@ const DEFAULT_SPEC_EXT_SUFFIX: &str = ".yaml";
 // for the same fully qualified device.
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Spec {
-    cdi_spec: CDISpec,
+    pub cdi_spec: CDISpec,
     vendor: String,
     class: String,
     path: String,
@@ -69,9 +79,35 @@ impl Spec {
     }
 
     // validate the Spec.
-    pub fn validate(&self) -> Result<BTreeMap<String, Device>> {
-        // TODO
-        Ok(BTreeMap::new())
+    pub fn validate(&mut self) -> Result<BTreeMap<String, Device>> {
+        validate_version(&self.cdi_spec.version)?;
+
+        let min_version = minimum_required_version(&self.cdi_spec)
+            .with_context(|| "could not determine minimum required version")?;
+        if Version::parse(&min_version)? > Version::parse(&self.cdi_spec.version)? {
+            return Err(anyhow::anyhow!(
+                "the spec version must be at least v{}",
+                min_version
+            ));
+        }
+
+        validate_vendor_name(&self.vendor)?;
+        validate_class_name(&self.class)?;
+        validate_spec_annotations(&self.cdi_spec.kind, &self.cdi_spec.annotations)?;
+
+        self.edits().unwrap().validate()?;
+
+        let mut devices = BTreeMap::new();
+        for d in &self.cdi_spec.devices {
+            let dev =
+                new_device(self, d).with_context(|| format!("failed to add device {}", d.name))?;
+            if devices.contains_key(&d.name) {
+                return Err(anyhow::anyhow!("invalid spec, multiple device {}", d.name));
+            }
+            devices.insert(d.name.clone(), dev);
+        }
+
+        Ok(devices) // TODO
     }
 
     // apply_edits applies the Spec's global-scope container edits to an OCI Spec.
@@ -137,4 +173,11 @@ pub fn new_spec(raw_spec: &CDISpec, path: &PathBuf, priority: i32) -> Result<Spe
     spec.devices = spec.validate().context("validate spec failed")?;
 
     Ok(spec)
+}
+
+fn validate_version(version: &str) -> Result<()> {
+    if !VALID_SPEC_VERSIONS.is_valid_version(version) {
+        return Err(anyhow::anyhow!("invalid version {}", version));
+    }
+    Ok(())
 }
