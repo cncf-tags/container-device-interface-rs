@@ -98,6 +98,7 @@ impl Generator {
                 let split: Vec<&str> = env.splitn(2, '=').collect();
                 let key = split[0].to_string();
                 let idx = self.env_map.entry(key.clone()).or_insert(env_vec.len());
+
                 if let Some(elem) = env_vec.get_mut(*idx) {
                     *elem = env.clone();
                 } else {
@@ -105,6 +106,7 @@ impl Generator {
                     self.env_map.insert(key, env_vec.len() - 1);
                 }
             }
+            process.set_env(Some(env_vec));
         }
     }
 

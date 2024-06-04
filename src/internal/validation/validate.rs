@@ -6,7 +6,7 @@ pub fn validate_spec_annotations(name: &str, annotations: &BTreeMap<String, Stri
     if annotations.is_empty() {
         return Ok(());
     }
-    validate_annotations_inner(name, &annotations)
+    validate_annotations_inner(name, annotations)
 }
 
 fn validate_annotations_inner(name: &str, annotations: &BTreeMap<String, String>) -> Result<()> {

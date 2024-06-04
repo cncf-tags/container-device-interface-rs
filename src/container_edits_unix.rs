@@ -25,12 +25,8 @@ impl ToString for DeviceType {
 // deviceInfoFromPath takes the path to a device and returns its type, major and minor device numbers.
 // It was adapted from https://github.com/opencontainers/runc/blob/v1.1.9/libcontainer/devices/device_unix.go#L30-L69
 pub fn device_info_from_path<P: AsRef<Path>>(path: P) -> Result<(String, i64, i64)> {
-    // In major, 0x00_00_00_00_ff_ff_ff_ff is a hexadecimal constant value used for bitmasking the result of dev >> 8,
-    // which is used to extract the major device number from the dev value by leveraging bitwise operations.
-    let major = |dev: u64| -> i64 { (dev >> 8) as i64 & 0x00_00_00_00_ff_ff_ff_ff };
-    // the closure fn minor uses bitmasking with the constant 0x00_00_00_00_00_00_ff_ff to extract the low 16 bits of dev,
-    // which correspond to the minor device number in Unix systems.
-    let minor = |dev: u64| -> i64 { dev as i64 & 0x00_00_00_00_00_00_ff_ff };
+    let major = |dev: u64| -> i64 { (dev >> 8) as i64 & 0xff };
+    let minor = |dev: u64| -> i64 { dev as i64 & 0xff };
 
     let metadata = std::fs::metadata(path)?;
     let file_type = metadata.file_type();

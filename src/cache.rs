@@ -122,17 +122,6 @@ impl Cache {
         self.devices.get(dev_name)
     }
 
-    pub fn get_devices(&mut self) -> Vec<String> {
-        let mut devices: Vec<String> = Vec::new();
-
-        let _ = self.refresh_if_required(false);
-
-        for device in self.specs.keys() {
-            devices.push(device.clone());
-        }
-        devices.sort();
-        devices
-    }
     pub fn list_devices(&mut self) -> Vec<String> {
         let _ = self.refresh_if_required(false);
 
@@ -164,7 +153,7 @@ impl Cache {
 
     // refresh the Cache by rescanning CDI Spec directories and files.
     pub fn refresh(&mut self) -> Result<(), Box<dyn Error>> {
-        let specs: HashMap<String, Vec<Spec>> = HashMap::new();
+        let mut specs: HashMap<String, Vec<Spec>> = HashMap::new();
         let mut devices: HashMap<String, Device> = HashMap::new();
         let mut conflicts: HashSet<String> = HashSet::new();
         let mut spec_errors: HashMap<String, Vec<Box<dyn Error>>> = HashMap::new();
@@ -204,10 +193,7 @@ impl Cache {
 
         let mut scan_spec_fn = |s: Spec| -> Result<(), Box<dyn Error>> {
             let vendor = s.get_vendor().to_owned();
-            self.specs
-                .entry(vendor.clone())
-                .or_default()
-                .push(s.clone());
+            specs.entry(vendor.clone()).or_default().push(s.clone());
             let spec_devices = s.get_devices();
             for dev in spec_devices.values() {
                 let qualified = dev.get_qualified_name();
@@ -275,19 +261,19 @@ impl Cache {
 
         let _ = self.refresh_if_required(false);
 
-        let mut edits = ContainerEdits::new();
-        let mut specs = HashSet::new();
+        let edits = &mut ContainerEdits::new();
+        let mut specs: HashSet<Spec> = HashSet::new();
 
         for device in devices {
             if let Some(dev) = self.devices.get(&device) {
                 let mut spec = dev.get_spec();
                 if specs.insert(spec.clone()) {
                     match spec.edits() {
-                        Some(ce) => edits.append(ce),
+                        Some(ce) => edits.append(ce)?,
                         None => continue,
                     };
                 }
-                edits.append(dev.edits());
+                edits.append(dev.edits())?;
             } else {
                 unresolved.push(device);
             }

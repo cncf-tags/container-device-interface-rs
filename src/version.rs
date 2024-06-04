@@ -1,13 +1,11 @@
+use anyhow::Result;
 use once_cell::sync::Lazy;
 use std::collections::BTreeMap;
-use anyhow::Result;
 
-use crate::specs::config;
 use crate::parser::parse_qualifier;
+use crate::specs::config;
 use crate::specs::config::Spec as CDISpec;
-use crate::specs::config::ContainerEdits;
 use semver::Version;
-
 
 const CURRENT_VERSION: &str = config::CURRENT_VERSION;
 static VCURRENT: Lazy<String> = Lazy::new(|| format!("v{}", CURRENT_VERSION));
@@ -43,7 +41,8 @@ pub static VALID_SPEC_VERSIONS: Lazy<VersionMap> = Lazy::new(|| {
 
 impl VersionMap {
     pub fn is_valid_version(&self, spec_version: &str) -> bool {
-        self.0.contains_key(&VersionWrapper::new(spec_version).to_string())
+        self.0
+            .contains_key(&format!("v{}", VersionWrapper::new(spec_version)))
     }
 
     pub fn required_version(&self, spec: &CDISpec) -> VersionWrapper {
@@ -66,17 +65,19 @@ impl VersionMap {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VersionWrapper(String);
 
+impl std::fmt::Display for VersionWrapper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.trim_start_matches('v'))
+    }
+}
+
 impl VersionWrapper {
-    fn new(v: &str) -> Self {
+    pub fn new(v: &str) -> Self {
         VersionWrapper(format!("v{}", v.trim_start_matches('v')))
     }
 
-    fn to_string(&self) -> String {
-        self.0.trim_start_matches('v').to_string()
-    }
-
-    fn is_greater_than(&self, other: &VersionWrapper) -> bool {
-        Version::parse(&self.0).unwrap() > Version::parse(&other.0).unwrap()
+    pub fn is_greater_than(&self, other: &VersionWrapper) -> bool {
+        Version::parse(&self.to_string()).unwrap() > Version::parse(&other.to_string()).unwrap()
     }
 
     fn is_latest(&self) -> bool {
@@ -84,20 +85,21 @@ impl VersionWrapper {
     }
 }
 
-
-pub fn minimum_required_version(spec: &CDISpec) -> Result<String> {
-    let min_version = VALID_SPEC_VERSIONS.required_version(spec);
-    Ok(min_version.to_string())
+pub fn minimum_required_version(spec: &CDISpec) -> Result<VersionWrapper> {
+    Ok(VALID_SPEC_VERSIONS.required_version(spec))
 }
 
 fn requires_v070(spec: &CDISpec) -> bool {
-
     let edits = &spec.container_edits;
     if let Some(edits) = edits {
         if edits.intel_rdt.as_ref().is_some() {
             return true;
         }
-        if edits.additional_gids.as_ref().map_or(false, |v| !v.is_empty()) {
+        if edits
+            .additional_gids
+            .as_ref()
+            .map_or(false, |v| !v.is_empty())
+        {
             return true;
         }
     }
@@ -108,7 +110,11 @@ fn requires_v070(spec: &CDISpec) -> bool {
         if edits.intel_rdt.as_ref().is_some() {
             return true;
         }
-        if edits.additional_gids.as_ref().map_or(false, |v| !v.is_empty()) {
+        if edits
+            .additional_gids
+            .as_ref()
+            .map_or(false, |v| !v.is_empty())
+        {
             return true;
         }
     }
@@ -132,37 +138,34 @@ fn requires_v060(spec: &CDISpec) -> bool {
 }
 
 fn requires_v050(spec: &CDISpec) -> bool {
-    let mut edits: Vec<ContainerEdits> = vec![];
-    for d in &spec.devices {
-        if !d.name.chars().next().unwrap_or_default().is_alphabetic() {
-            return true;
-        }
-        edits.push(d.container_edits.clone());
+    if spec
+        .devices
+        .iter()
+        .any(|d| !d.name.chars().next().unwrap_or_default().is_alphabetic())
+    {
+        return true;
     }
-    edits.push(spec.container_edits.clone().unwrap());
 
-    for e in edits {
-        for dn in e.device_nodes.unwrap() {
-            if !dn.host_path.unwrap().is_empty() {
-                return true;
-            }
-        }
-    }
-    false
+    let edits = spec
+        .devices
+        .iter()
+        .map(|d| &d.container_edits)
+        .chain(spec.container_edits.as_ref());
+
+    edits
+        .flat_map(|edits| edits.device_nodes.iter().flat_map(|nodes| nodes.iter()))
+        .any(|node| {
+            node.host_path
+                .as_deref()
+                .map_or(false, |path| !path.is_empty())
+        })
 }
 
 fn requires_v040(spec: &CDISpec) -> bool {
-    let mut edits: Vec<&ContainerEdits> = vec![];
-    for d in &spec.devices {
-        edits.push(&d.container_edits);
-    }
-    edits.push(&spec.container_edits.as_ref().unwrap());
-    for e in edits {
-        for m in &e.mounts.clone().unwrap() {
-            if !m.r#type.clone().unwrap().is_empty() {
-                return true;
-            }
-        }
-    }
-    false
+    spec.devices
+        .iter()
+        .map(|d| &d.container_edits)
+        .chain(std::iter::once(spec.container_edits.as_ref().unwrap()))
+        .flat_map(|edits| edits.mounts.iter().flat_map(|mounts| mounts.iter()))
+        .any(|mount| mount.r#type.as_ref().map_or(false, |typ| !typ.is_empty()))
 }
