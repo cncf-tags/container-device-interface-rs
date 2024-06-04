@@ -64,10 +64,10 @@ impl ContainerEdits {
                 dn.fill_missing_info()
                     .context("filling missing info failed.")?;
 
-                let mut dev = d.to_oci()?;
+                let d = &dn.node;
+                let mut dev = dn.node.to_oci()?;
                 if let Some(process) = oci_spec.process_mut() {
                     let user = process.user_mut();
-
                     let gid = user.gid();
                     if gid > 0 {
                         dev.set_gid(Some(gid));
@@ -142,11 +142,19 @@ impl ContainerEdits {
             }
         }
 
+        if let Some(ref spec) = spec_gen.config {
+            oci_spec.set_linux(spec.linux().clone());
+            oci_spec.set_mounts(spec.mounts().clone());
+            oci_spec.set_annotations(spec.annotations().clone());
+            oci_spec.set_hooks(spec.hooks().clone());
+            oci_spec.set_process(spec.process().clone());
+        }
+
         Ok(())
     }
 
     // append other edits into this one.
-    pub fn append(&mut self, o: ContainerEdits) -> Self {
+    pub fn append(&mut self, o: ContainerEdits) -> Result<()> {
         let intel_rdt = if o.container_edits.intel_rdt.is_some() {
             o.container_edits.intel_rdt
         } else {
@@ -168,9 +176,9 @@ impl ContainerEdits {
             ),
         };
 
-        Self {
-            container_edits: ce,
-        }
+        self.container_edits = ce;
+
+        Ok(())
     }
 }
 

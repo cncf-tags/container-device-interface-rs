@@ -3,7 +3,6 @@ use std::{collections::BTreeMap, fs::File, path::PathBuf};
 use anyhow::{anyhow, Context, Result};
 use oci_spec::runtime as oci;
 use path_clean::clean;
-use semver::Version;
 
 use crate::{
     container_edits::ContainerEdits,
@@ -16,7 +15,7 @@ use crate::{
     parser::validate_vendor_name,
     specs::config::Spec as CDISpec,
     utils::is_cdi_spec,
-    version::{minimum_required_version, VALID_SPEC_VERSIONS},
+    version::{minimum_required_version, VersionWrapper, VALID_SPEC_VERSIONS},
 };
 
 const DEFAULT_SPEC_EXT_SUFFIX: &str = ".yaml";
@@ -80,22 +79,15 @@ impl Spec {
 
     // validate the Spec.
     pub fn validate(&mut self) -> Result<BTreeMap<String, Device>> {
-        validate_version(&self.cdi_spec.version)?;
+        validate_version(&self.cdi_spec).context("validate cdi version failed")?;
+        validate_vendor_name(&self.vendor).context("validate vendor name failed")?;
+        validate_class_name(&self.class).context("validate class name failed")?;
+        validate_spec_annotations(&self.cdi_spec.kind, &self.cdi_spec.annotations)
+            .context("validate spec annotations failed")?;
 
-        let min_version = minimum_required_version(&self.cdi_spec)
-            .with_context(|| "could not determine minimum required version")?;
-        if Version::parse(&min_version)? > Version::parse(&self.cdi_spec.version)? {
-            return Err(anyhow::anyhow!(
-                "the spec version must be at least v{}",
-                min_version
-            ));
+        if let Some(ref mut ce) = self.edits() {
+            ce.validate().context("validate container edits failed")?;
         }
-
-        validate_vendor_name(&self.vendor)?;
-        validate_class_name(&self.class)?;
-        validate_spec_annotations(&self.cdi_spec.kind, &self.cdi_spec.annotations)?;
-
-        self.edits().unwrap().validate()?;
 
         let mut devices = BTreeMap::new();
         for d in &self.cdi_spec.devices {
@@ -107,7 +99,7 @@ impl Spec {
             devices.insert(d.name.clone(), dev);
         }
 
-        Ok(devices) // TODO
+        Ok(devices)
     }
 
     // apply_edits applies the Spec's global-scope container edits to an OCI Spec.
@@ -175,9 +167,21 @@ pub fn new_spec(raw_spec: &CDISpec, path: &PathBuf, priority: i32) -> Result<Spe
     Ok(spec)
 }
 
-fn validate_version(version: &str) -> Result<()> {
+fn validate_version(cdi_spec: &CDISpec) -> Result<()> {
+    let version = &cdi_spec.version;
     if !VALID_SPEC_VERSIONS.is_valid_version(version) {
         return Err(anyhow::anyhow!("invalid version {}", version));
     }
+
+    let min_version = minimum_required_version(cdi_spec)
+        .with_context(|| "could not determine minimum required version")?;
+
+    if min_version.is_greater_than(&VersionWrapper::new(version)) {
+        return Err(anyhow::anyhow!(
+            "the spec version must be at least v{}",
+            min_version.to_string()
+        ));
+    }
+
     Ok(())
 }

@@ -34,7 +34,7 @@ fn cdi_list_devices(verbose: bool, format: &str) -> Result<()> {
     for (idx, device) in devices.iter().enumerate() {
         cdi_print_device(
             idx,
-            cache.lock().unwrap().get_device(&device).unwrap().clone(),
+            cache.lock().unwrap().get_device(device).unwrap().clone(),
             verbose,
             format,
             2,
