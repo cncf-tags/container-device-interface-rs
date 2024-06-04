@@ -16,7 +16,8 @@ pub fn handle_cdi_inject(args: &InjectArgs) -> Result<()> {
 }
 
 pub fn handle_cdi_devices(args: &DevicesArgs) -> Result<()> {
-    let _ = cdi_list_devices(args.verbose, &args.format);
+    cdi_list_devices(args.verbose, &args.format)
+        .context("cdi list devices failed")?;
     Ok(())
 }
 
@@ -44,11 +45,7 @@ fn cdi_list_devices(verbose: bool, format: &str) -> Result<()> {
 
 fn cdi_print_device(idx: usize, dev: Device, verbose: bool, format: &str, level: usize) {
     if !verbose {
-        if idx > 0 {
-            println!("{}{}. {}", indent(level), idx, dev.get_qualified_name());
-            return;
-        }
-        println!("{}{}", indent(level), dev.get_qualified_name());
+        println!("{}{}. {}", indent(level), idx, dev.get_qualified_name());
         return;
     }
 
