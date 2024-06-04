@@ -41,8 +41,8 @@ pub(crate) fn update_annotations(
 // are returned along with a non-nil error. The annotations are expected
 // to be formatted by, or in a compatible fashion to UpdateAnnotations().
 #[allow(dead_code)]
-pub(crate) fn parse_annotations(
-    annotations: HashMap<String, String>,
+pub fn parse_annotations(
+    annotations: &HashMap<String, String>,
 ) -> Result<(Vec<String>, Vec<String>)> {
     let mut keys: Vec<String> = Vec::new();
     let mut devices: Vec<String> = Vec::new();
@@ -58,7 +58,7 @@ pub(crate) fn parse_annotations(
             }
             devices.push(device.to_string());
         }
-        keys.push(k);
+        keys.push(k.to_string());
     }
 
     Ok((keys, devices))
@@ -169,8 +169,8 @@ mod tests {
                 .to_string(),
         );
 
-        assert!(parse_annotations(cdi_devices.clone()).is_ok());
-        let (keys, devices) = parse_annotations(cdi_devices).unwrap();
+        assert!(parse_annotations(&cdi_devices).is_ok());
+        let (keys, devices) = parse_annotations(&cdi_devices).unwrap();
         assert_eq!(keys.len(), 3);
         assert_eq!(devices.len(), 3);
     }

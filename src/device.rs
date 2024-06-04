@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use anyhow::{anyhow, Context, Result};
 use oci_spec::runtime as oci;
@@ -8,7 +8,7 @@ use crate::{
     parser::{qualified_name, validate_device_name},
     spec::Spec,
     specs::config::Device as CDIDevice,
-    validations::validate_spec_annotations,
+    internal::validation::validate::validate_spec_annotations,
 };
 
 // Device represents a CDI device of a Spec.
@@ -82,7 +82,7 @@ impl Device {
         validate_device_name(&self.cdi_device.name).context("validate device name failed")?;
         let name = self.get_qualified_name();
 
-        let annotations: &HashMap<String, String> =
+        let annotations: &BTreeMap<String, String> =
             &<BTreeMap<String, String> as Clone>::clone(&self.cdi_device.annotations)
                 .into_iter()
                 .collect();

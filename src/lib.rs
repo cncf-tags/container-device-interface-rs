@@ -12,7 +12,6 @@ pub mod spec;
 pub mod spec_dirs;
 pub mod specs;
 pub mod utils;
-pub mod validations;
 pub mod version;
 
 #[cfg(test)]
