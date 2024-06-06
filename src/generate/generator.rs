@@ -100,7 +100,7 @@ impl Generator {
                 let idx = self.env_map.entry(key.clone()).or_insert(env_vec.len());
 
                 if let Some(elem) = env_vec.get_mut(*idx) {
-                    *elem = env.clone();
+                    elem.clone_from(env);
                 } else {
                     env_vec.push(env.clone());
                     self.env_map.insert(key, env_vec.len() - 1);

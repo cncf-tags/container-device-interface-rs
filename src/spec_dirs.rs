@@ -91,7 +91,7 @@ pub fn with_spec_dirs(dirs: &[&str]) -> CdiOption {
         .collect();
 
     Box::new(move |cache: &mut Cache| {
-        cache.spec_dirs = cleaned_dirs.clone();
+        cache.spec_dirs.clone_from(&cleaned_dirs);
     })
 }
 
