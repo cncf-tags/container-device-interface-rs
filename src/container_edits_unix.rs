@@ -1,8 +1,8 @@
 use std::{
+    fmt,
     io::{Error, ErrorKind},
     os::unix::fs::{FileTypeExt, MetadataExt},
     path::Path,
-    fmt,
 };
 
 use anyhow::Result;
