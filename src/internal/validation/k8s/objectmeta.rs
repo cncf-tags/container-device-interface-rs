@@ -70,7 +70,10 @@ mod tests {
         assert!(validate_annotations(&large_annotations, path).is_err());
 
         let mut invalid_annotations = BTreeMap::new();
-        invalid_annotations.insert("inv$$alid_CDIKEY".to_string(), "inv$$alid_CDIVAL".to_string());
+        invalid_annotations.insert(
+            "inv$$alid_CDIKEY".to_string(),
+            "inv$$alid_CDIVAL".to_string(),
+        );
         assert!(validate_annotations(&invalid_annotations, path).is_err());
     }
 
@@ -99,7 +102,10 @@ mod tests {
         assert!(validate_spec_annotations("", &large_annotations).is_err());
 
         let mut invalid_annotations = BTreeMap::new();
-        invalid_annotations.insert("inva$$lid_CDIKEY".to_string(), "inval$$id_CDIVAL".to_string());
+        invalid_annotations.insert(
+            "inva$$lid_CDIKEY".to_string(),
+            "inval$$id_CDIVAL".to_string(),
+        );
         assert!(validate_spec_annotations("CDITEST", &invalid_annotations).is_err());
     }
 }

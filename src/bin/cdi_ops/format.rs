@@ -1,9 +1,9 @@
 use serde::Serialize;
 use serde_json;
 use serde_yaml;
-use std::path::Path;
-use std::fmt::Write;
 use std::error::Error;
+use std::fmt::Write;
+use std::path::Path;
 
 pub fn choose_format(format: &str, path: &str) -> String {
     let mut format = format.to_string();
@@ -28,7 +28,7 @@ pub fn marshal_object<T: Serialize>(level: usize, obj: &T, format: &str) -> Stri
         Ok(data) => {
             let mut out = String::new();
             for line in data.lines() {
-		writeln!(out, "{}{}", &indent(level), line).unwrap();
+                writeln!(out, "{}{}", &indent(level), line).unwrap();
             }
             out
         }
