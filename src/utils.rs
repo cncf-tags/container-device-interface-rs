@@ -19,7 +19,7 @@ where
     });
 
     if result.is_none() {
-        result = v2.clone();
+        result.clone_from(v2);
     }
 
     result
