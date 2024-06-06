@@ -2,6 +2,7 @@ use std::{
     io::{Error, ErrorKind},
     os::unix::fs::{FileTypeExt, MetadataExt},
     path::Path,
+    fmt,
 };
 
 use anyhow::Result;
@@ -12,13 +13,14 @@ pub enum DeviceType {
     Fifo,
 }
 
-impl ToString for DeviceType {
-    fn to_string(&self) -> String {
-        match self {
-            DeviceType::Block => "b".to_string(),
-            DeviceType::Char => "c".to_string(),
-            DeviceType::Fifo => "p".to_string(),
-        }
+impl fmt::Display for DeviceType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            DeviceType::Block => "b",
+            DeviceType::Char => "c",
+            DeviceType::Fifo => "p",
+        };
+        write!(f, "{}", s)
     }
 }
 

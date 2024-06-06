@@ -177,7 +177,7 @@ mod tests {
         let name = "0";
         let device = parser::qualified_name(vendor, class, name);
         assert_eq!(device, "nvidia.com/gpu=0");
-        assert_eq!(parser::is_qualified_name(&device), true);
+        assert!(parser::is_qualified_name(&device));
     }
 
     #[test]
