@@ -1,10 +1,16 @@
+use const_format::concatcp;
 use lazy_static::lazy_static;
 use regex::Regex;
-use const_format::concatcp;
 
 const QNAME_CHAR_FMT: &str = "[A-Za-z0-9]";
 const QNAME_EXT_CHAR_FMT: &str = "[-A-Za-z0-9_.]";
-const QUALIFIED_NAME_FMT: &str = concatcp!("(", QNAME_CHAR_FMT, QNAME_EXT_CHAR_FMT, "*)?", QNAME_CHAR_FMT);
+const QUALIFIED_NAME_FMT: &str = concatcp!(
+    "(",
+    QNAME_CHAR_FMT,
+    QNAME_EXT_CHAR_FMT,
+    "*)?",
+    QNAME_CHAR_FMT
+);
 const QUALIFIED_NAME_ERR_MSG: &str = "must consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character";
 const QUALIFIED_NAME_MAX_LENGTH: usize = 63;
 

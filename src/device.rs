@@ -5,10 +5,10 @@ use oci_spec::runtime as oci;
 
 use crate::{
     container_edits::{ContainerEdits, Validate},
+    internal::validation::validate::validate_spec_annotations,
     parser::{qualified_name, validate_device_name},
     spec::Spec,
     specs::config::Device as CDIDevice,
-    internal::validation::validate::validate_spec_annotations,
 };
 
 // Device represents a CDI device of a Spec.

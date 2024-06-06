@@ -1,10 +1,12 @@
 use anyhow::Result;
-use cdi::default_cache::{inject_devices, list_devices};
-use oci_spec::runtime as oci;
 use cdi::default_cache::get_default_cache;
+use cdi::default_cache::{inject_devices, list_devices};
 use cdi::device::Device;
+use oci_spec::runtime as oci;
 
-use crate::cdi_ops::{format::marshal_object, format::indent, format::choose_format, utils::find_target_devices};
+use crate::cdi_ops::{
+    format::choose_format, format::indent, format::marshal_object, utils::find_target_devices,
+};
 
 pub fn cdi_inject_devices(
     oci_spec: &mut oci::Spec,
