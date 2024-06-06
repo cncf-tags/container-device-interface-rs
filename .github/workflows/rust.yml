@@ -16,7 +16,27 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+
     - name: Build
       run: cargo build --verbose
+
     - name: Run tests
       run: cargo test --verbose
+
+    - name: Run cargo fmt
+      run: |
+         cargo fmt --all -- --check
+
+    - name: Check for unformatted code
+      run: |
+        if ! git diff --exit-code; then
+          echo "Code is not formatted. Please run 'cargo fmt' to format the code."
+          exit 1
+        fi
+
+    - name: Install clippy
+      run: rustup component add clippy
+
+    - name: Run cargo clippy
+      run: |
+        cargo clippy --all-targets --all-features -- -D warnings
