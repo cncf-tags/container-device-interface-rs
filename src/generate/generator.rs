@@ -116,6 +116,8 @@ impl Generator {
         if let Some(hooks) = self.config.as_mut().unwrap().hooks_mut() {
             if let Some(prestart_hooks) = hooks.prestart_mut() {
                 prestart_hooks.push(hook);
+            } else {
+                hooks.set_prestart(Some(vec![hook]));
             }
         }
     }
@@ -126,6 +128,8 @@ impl Generator {
         if let Some(hooks) = self.config.as_mut().unwrap().hooks_mut() {
             if let Some(poststop_hooks) = hooks.poststop_mut() {
                 poststop_hooks.push(hook);
+            } else {
+                hooks.set_poststop(Some(vec![hook]));
             }
         }
     }
@@ -136,6 +140,8 @@ impl Generator {
         if let Some(hooks) = self.config.as_mut().unwrap().hooks_mut() {
             if let Some(poststart_hooks) = hooks.poststart_mut() {
                 poststart_hooks.push(hook);
+            } else {
+                hooks.set_poststart(Some(vec![hook]));
             }
         }
     }
@@ -146,6 +152,8 @@ impl Generator {
         if let Some(hooks) = self.config.as_mut().unwrap().hooks_mut() {
             if let Some(create_runtime) = hooks.create_runtime_mut() {
                 create_runtime.push(hook);
+            } else {
+                hooks.set_create_runtime(Some(vec![hook]));
             }
         }
     }
@@ -156,6 +164,8 @@ impl Generator {
         if let Some(hooks) = self.config.as_mut().unwrap().hooks_mut() {
             if let Some(create_container) = hooks.create_container_mut() {
                 create_container.push(hook);
+            } else {
+                hooks.set_create_container(Some(vec![hook]));
             }
         }
     }
@@ -166,6 +176,8 @@ impl Generator {
         if let Some(hooks) = self.config.as_mut().unwrap().hooks_mut() {
             if let Some(start_container) = hooks.start_container_mut() {
                 start_container.push(hook);
+            } else {
+                hooks.set_start_container(Some(vec![hook]));
             }
         }
     }
