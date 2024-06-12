@@ -53,6 +53,18 @@ impl Generator {
         }
     }
 
+    pub fn init_config_linux_resources_devices(&mut self) {
+        self.init_config_linux_resources();
+
+        if let Some(linux) = self.config.as_mut().unwrap().linux_mut() {
+            if let Some(resource) = linux.resources_mut() {
+                if resource.devices().is_none() {
+                    resource.set_devices(Some(Vec::new()));
+                }
+            }
+        }
+    }
+
     pub fn init_config_hooks(&mut self) {
         self.init_config();
 

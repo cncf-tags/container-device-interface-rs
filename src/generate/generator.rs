@@ -47,7 +47,7 @@ impl Generator {
         minor: Option<i64>,
         access: Option<String>,
     ) {
-        self.init_config_linux_resources();
+        self.init_config_linux_resources_devices();
         if let Some(linux) = self.config.as_mut().unwrap().linux_mut() {
             if let Some(resource) = linux.resources_mut() {
                 if let Some(devices) = resource.devices_mut() {
