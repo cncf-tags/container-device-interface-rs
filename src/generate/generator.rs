@@ -50,15 +50,25 @@ impl Generator {
         self.init_config_linux_resources();
         if let Some(linux) = self.config.as_mut().unwrap().linux_mut() {
             if let Some(resource) = linux.resources_mut() {
-                if let Some(devices) = resource.devices_mut() {
+
+                let add_device = |allow, dev_type, major, minor, access| {
                     let mut device = LinuxDeviceCgroup::default();
                     device.set_allow(allow);
                     device.set_typ(Some(dev_type));
                     device.set_major(major);
                     device.set_minor(minor);
                     device.set_access(access);
+                    device
+                };
 
+                let device = add_device(allow, dev_type, major, minor, access);
+
+                if let Some(devices) = resource.devices_mut() {
                     devices.push(device);
+                } else {
+                    let mut devices = Vec::new();
+                    devices.push(device);
+                    resource.set_devices(Some(devices));
                 }
             }
         }
