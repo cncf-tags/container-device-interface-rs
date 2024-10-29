@@ -23,7 +23,7 @@ lazy_static! {
     // DEFAULT_SPEC_DIRS is the default Spec directory configuration.
     // While altering this variable changes the package defaults,
     // the preferred way of overriding the default directories is
-    // to use a WithSpecDirs options. Otherwise the change is only
+    // to use a with_spec_dirs options. Otherwise the change is only
     // effective if it takes place before creating the Registry or
     // other Cache instances.
     pub static ref DEFAULT_SPEC_DIRS: &'static [&'static str] = &[

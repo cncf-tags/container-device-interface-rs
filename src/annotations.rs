@@ -13,7 +13,7 @@ const MAX_NAME_LEN: usize = 63;
 // be in the format of "vendor.device-type".
 #[allow(dead_code)]
 pub(crate) fn update_annotations(
-    option_annotaions: Option<HashMap<String, String>>,
+    option_annotations: Option<HashMap<String, String>>,
     plugin_name: &str,
     device_id: &str,
     devices: Vec<String>,
