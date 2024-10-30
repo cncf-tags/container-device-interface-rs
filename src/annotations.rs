@@ -13,12 +13,12 @@ const MAX_NAME_LEN: usize = 63;
 // be in the format of "vendor.device-type".
 #[allow(dead_code)]
 pub(crate) fn update_annotations(
-    option_annotaions: Option<HashMap<String, String>>,
+    option_annotations: Option<HashMap<String, String>>,
     plugin_name: &str,
     device_id: &str,
     devices: Vec<String>,
 ) -> Result<HashMap<String, String>> {
-    let mut annotations = option_annotations.unwrap_or_else(HashMap::new);
+    let mut annotations = option_annotations.unwrap_or_default();
 
     let key = annotation_key(plugin_name, device_id).context("CDI annotation key failed")?;
     if annotations.contains_key(&key) {
