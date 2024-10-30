@@ -80,7 +80,16 @@ pub struct Cache {
 }
 
 pub fn new_cache(options: Vec<Arc<dyn CacheOption>>) -> Arc<Mutex<Cache>> {
-    let cache = Arc::new(Mutex::new(Cache::default()));
+    let cache = Arc::new(Mutex::new(
+        Cache {
+            spec_dirs: Vec::new(),
+            specs: HashMap::new(),
+            devices: HashMap::new(),
+            errors: HashMap::new(),
+            dir_errors: HashMap::new(),
+            auto_refresh: true,
+        }
+    ));
 
     {
         let mut c = cache.lock().unwrap();
