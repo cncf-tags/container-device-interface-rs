@@ -18,10 +18,7 @@ pub(crate) fn update_annotations(
     device_id: &str,
     devices: Vec<String>,
 ) -> Result<HashMap<String, String>> {
-    let mut annotations = match option_annotaions {
-        Some(annos) => annos,
-        None => HashMap::new(),
-    };
+    let mut annotations = option_annotations.unwrap_or_else(HashMap::new);
 
     let key = annotation_key(plugin_name, device_id).context("CDI annotation key failed")?;
     if annotations.contains_key(&key) {

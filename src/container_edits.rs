@@ -378,7 +378,7 @@ impl Validate for IntelRdt {
             if clos_id.len() >= 4096
                 || clos_id == "."
                 || clos_id == ".."
-                || clos_id.contains(|c| c == '/' || c == '\n')
+                || clos_id.contains(&['/', '\n'][..])
             {
                 return Err(anyhow!("invalid clos id".to_string()));
             }
