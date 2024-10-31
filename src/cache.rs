@@ -78,14 +78,7 @@ pub struct Cache {
 }
 
 pub fn new_cache(options: Vec<CdiOption>) -> Arc<Mutex<Cache>> {
-    let cache = Arc::new(Mutex::new(Cache {
-        spec_dirs: Vec::new(),
-        specs: HashMap::new(),
-        devices: HashMap::new(),
-        errors: HashMap::new(),
-        dir_errors: HashMap::new(),
-        auto_refresh: true,
-    }));
+    let cache = Arc::new(Mutex::new(Cache::default()));
 
     {
         let mut c = cache.lock().unwrap();
@@ -273,10 +266,11 @@ impl Cache {
             if let Some(dev) = self.devices.get(&device) {
                 let mut spec = dev.get_spec();
                 if specs.insert(spec.clone()) {
-                    match spec.edits() {
-                        Some(ce) => edits.append(ce)?,
-                        None => continue,
-                    };
+                    // spec.edits may be none when we only have dev.edits
+                    // allow dev.edits to be added even if spec.edits is None
+                    if let Some(ce) = spec.edits() {
+                        edits.append(ce)?
+                    }
                 }
                 edits.append(dev.edits())?;
             } else {
