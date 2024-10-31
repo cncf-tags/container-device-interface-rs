@@ -48,22 +48,20 @@ impl fmt::Display for ConflictError {
 
 impl Error for ConflictError {}
 
-// CacheOption is an option to change some aspect of default CDI behavior.
-pub trait CacheOption {
-    fn apply(&self, cache: &mut Cache);
-}
+// CdiOption is an option to change some aspect of default CDI behavior.
+// We define the CdiOption type using a type alias, which is a Box<dyn FnOnce(&mut Cache)>.
+// This means that CdiOption is a trait object that represents a one-time closure that takes a &mut Cache parameter.
+pub type CdiOption = Box<dyn FnOnce(&mut Cache)>;
 
-// WithAutoRefresh returns an option to control automatic Cache refresh.
+// with_auto_refresh returns an option to control automatic Cache refresh.
 // By default auto-refresh is enabled, the list of Spec directories are
 // monitored and the Cache is automatically refreshed whenever a change
 // is detected. This option can be used to disable this behavior when a
 // manually refreshed mode is preferable.
-pub struct WithAutoRefresh(pub bool);
-
-impl CacheOption for WithAutoRefresh {
-    fn apply(&self, cache: &mut Cache) {
-        cache.auto_refresh = self.0;
-    }
+pub fn with_auto_refresh(auto_refresh: bool) -> CdiOption {
+    Box::new(move |c: &mut Cache| {
+        c.auto_refresh = auto_refresh;
+    })
 }
 
 #[allow(dead_code)]
@@ -79,17 +77,15 @@ pub struct Cache {
     //watch: Watch,
 }
 
-pub fn new_cache(options: Vec<Arc<dyn CacheOption>>) -> Arc<Mutex<Cache>> {
-    let cache = Arc::new(Mutex::new(
-        Cache {
-            spec_dirs: Vec::new(),
-            specs: HashMap::new(),
-            devices: HashMap::new(),
-            errors: HashMap::new(),
-            dir_errors: HashMap::new(),
-            auto_refresh: true,
-        }
-    ));
+pub fn new_cache(options: Vec<CdiOption>) -> Arc<Mutex<Cache>> {
+    let cache = Arc::new(Mutex::new(Cache {
+        spec_dirs: Vec::new(),
+        specs: HashMap::new(),
+        devices: HashMap::new(),
+        errors: HashMap::new(),
+        dir_errors: HashMap::new(),
+        auto_refresh: true,
+    }));
 
     {
         let mut c = cache.lock().unwrap();
@@ -119,9 +115,9 @@ impl Cache {
         }
     }
 
-    pub fn configure(&mut self, options: Vec<Arc<dyn CacheOption>>) {
+    pub fn configure(&mut self, options: Vec<CdiOption>) {
         for option in options {
-            option.apply(self);
+            option(self);
         }
     }
 
