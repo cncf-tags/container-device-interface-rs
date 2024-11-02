@@ -165,7 +165,7 @@ fn requires_v040(spec: &CDISpec) -> bool {
     spec.devices
         .iter()
         .map(|d| &d.container_edits)
-        .chain(std::iter::once(spec.container_edits.as_ref().unwrap()))
+        .chain(spec.container_edits.as_ref())
         .flat_map(|edits| edits.mounts.iter().flat_map(|mounts| mounts.iter()))
         .any(|mount| mount.r#type.as_ref().map_or(false, |typ| !typ.is_empty()))
 }

@@ -9,7 +9,7 @@ use lazy_static::lazy_static;
 use path_clean::clean;
 
 use crate::{
-    cache::Cache,
+    cache::{Cache, CdiOption},
     spec::{read_spec, Spec},
     utils::is_cdi_spec,
 };
@@ -31,11 +31,6 @@ lazy_static! {
         DEFAULT_DYNAMIC_DIR,
     ];
 }
-
-// CdiOption is an option to change some aspect of default CDI behavior.
-// We define the CdiOption type using a type alias, which is a Box<dyn FnOnce(&mut Cache)>.
-// This means that CdiOption is a trait object that represents a one-time closure that takes a &mut Cache parameter.
-type CdiOption = Box<dyn FnOnce(&mut Cache)>;
 
 #[derive(Debug)]
 pub struct SpecError {
