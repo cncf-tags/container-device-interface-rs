@@ -278,7 +278,7 @@ impl Validate for DeviceNode {
         }
 
         if let Some(typ) = &self.node.r#type {
-            if valid_typs.contains(&typ.as_str()) {
+            if !valid_typs.contains(&typ.as_str()) {
                 return Err(anyhow!(
                     "device {:?}: invalid type {:?}",
                     self.node.path,
