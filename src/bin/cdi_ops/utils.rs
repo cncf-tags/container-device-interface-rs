@@ -32,7 +32,6 @@ pub fn read_oci_spec(path: &str) -> Result<oci::Spec> {
 }
 
 #[cfg(test)]
-
 mod tests {
     use crate::cdi_ops::utils::find_target_devices;
 
