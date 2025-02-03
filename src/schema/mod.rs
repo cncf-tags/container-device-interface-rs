@@ -1,7 +1,7 @@
 use anyhow::Ok;
 // use core::panic;
 // use jsonschema::Draft;
-// use jsonschema::JSONSchema;
+// use jsonschema::Validator;
 // use serde_json::json;
 // use serde_json::Value;
 
@@ -10,7 +10,7 @@ use anyhow::Result;
 const _SCHEMA_JSON: &str = include_str!("schema.json");
 const _DEFS_JSON: &str = include_str!("defs.json");
 
-pub fn validate(_schema: &jsonschema::JSONSchema, _doc_data: &[u8]) -> Result<()> {
+pub fn validate(_schema: &jsonschema::Validator, _doc_data: &[u8]) -> Result<()> {
     let mut schema_json: serde_json::Value = serde_json::from_str(include_str!("schema.json"))?;
     let defs_json: serde_json::Value = serde_json::from_str(include_str!("defs.json"))?;
 
@@ -19,7 +19,7 @@ pub fn validate(_schema: &jsonschema::JSONSchema, _doc_data: &[u8]) -> Result<()
         obj.insert("definitions".to_string(), defs_json);
     }
     /*
-        let compiled_schema = JSONSchema::options()
+        let compiled_schema = Validator::options()
             .with_draft(Draft::Draft7) // Adjust the draft version as needed
             .compile(&schema_json)?;
 
@@ -34,7 +34,7 @@ pub fn validate(_schema: &jsonschema::JSONSchema, _doc_data: &[u8]) -> Result<()
 
 /*
 fn validate_data(schema: &Value, data: &Value) -> Result<(), Vec<jsonschema::ValidationError>> {
-    let compiled_schema = JSONSchema::options()
+    let compiled_schema = Validator::options()
         .with_draft(Draft::Draft7) // Adjust the draft version as needed
         .compile(schema)?;
 
@@ -43,7 +43,7 @@ fn validate_data(schema: &Value, data: &Value) -> Result<(), Vec<jsonschema::Val
 
 
 
-pub fn load(schema_file: &str) -> Result<jsonschema::JSONSchema> {
+pub fn load(schema_file: &str) -> Result<jsonschema::Validator> {
 
     let schema_context = SchemaContext::builtin()?;
     Ok(schema_context.compiled_schema)
@@ -53,7 +53,7 @@ pub fn load(schema_file: &str) -> Result<jsonschema::JSONSchema> {
 
         print!("schema:\n{}", builtin_schema);
 
-        match jsonschema::JSONSchema::compile(&serde_json::from_str(&builtin_schema)?) {
+        match jsonschema::Validator::compile(&serde_json::from_str(&builtin_schema)?) {
             Ok(schema) => return Ok(schema),
             Err(e) => return Err(anyhow!("failed to compile builtin schema {}", e)),
         }
@@ -63,7 +63,7 @@ pub fn load(schema_file: &str) -> Result<jsonschema::JSONSchema> {
 }
 
 
- pub fn validate(schema: &jsonschema::JSONSchema, doc_data: &[u8]) -> Result<()> {
+ pub fn validate(schema: &jsonschema::Validator, doc_data: &[u8]) -> Result<()> {
     let doc = serde_json::from_slice(doc_data)?;
     match schema.validate(&doc) {
         Ok(_) => (),
