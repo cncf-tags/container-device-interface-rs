@@ -98,7 +98,7 @@ fn requires_v070(spec: &CDISpec) -> bool {
         if edits
             .additional_gids
             .as_ref()
-            .map_or(false, |v| !v.is_empty())
+            .is_some_and(|v| !v.is_empty())
         {
             return true;
         }
@@ -113,7 +113,7 @@ fn requires_v070(spec: &CDISpec) -> bool {
         if edits
             .additional_gids
             .as_ref()
-            .map_or(false, |v| !v.is_empty())
+            .is_some_and(|v| !v.is_empty())
         {
             return true;
         }
@@ -157,7 +157,7 @@ fn requires_v050(spec: &CDISpec) -> bool {
         .any(|node| {
             node.host_path
                 .as_deref()
-                .map_or(false, |path| !path.is_empty())
+                .is_some_and(|path| !path.is_empty())
         })
 }
 
@@ -167,5 +167,5 @@ fn requires_v040(spec: &CDISpec) -> bool {
         .map(|d| &d.container_edits)
         .chain(spec.container_edits.as_ref())
         .flat_map(|edits| edits.mounts.iter().flat_map(|mounts| mounts.iter()))
-        .any(|mount| mount.r#type.as_ref().map_or(false, |typ| !typ.is_empty()))
+        .any(|mount| mount.r#type.as_ref().is_some_and(|typ| !typ.is_empty()))
 }
