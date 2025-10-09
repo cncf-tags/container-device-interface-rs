@@ -1,0 +1,82 @@
+name: Release and Publish Rust Crate
+
+on:
+  workflow_call:
+    inputs:
+      rust_toolchain:
+        description: "Rust toolchain channel (e.g., stable, 1.81.0)"
+        required: false
+        default: '1.85.1'
+        type: string
+
+# Required for Trusted Publishing (OIDC) with crates.io
+# See: https://crates.io/docs/trusted-publishing
+permissions:
+  contents: write   # needed to create/push tags & (optionally) releases
+  id-token: write   # REQUIRED for crates.io trusted publishing (no API token secret)
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish to crates.io (Trusted Publishing)
+    runs-on: ubuntu-24.04
+    environment: release
+    outputs:
+      version: ${{ steps.version.outputs.file_version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          fetch-depth: 0  # ensure tags/history are available
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: ${{ inputs.rust_toolchain }}
+          
+      - name: Derive version from Cargo.toml and create tag
+        id: version
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          FILE_VERSION=$(awk -F '"' '/^version[[:space:]]*=/ {print $2; exit}' Cargo.toml)
+          if [[ -z "${FILE_VERSION:-}" ]]; then
+            echo "::error::version not found in Cargo.toml"; exit 1
+          fi
+          TAG="v${FILE_VERSION}"
+          echo "file_version=${FILE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          # Create and push tag; if it already exists, this will fail (desired)
+          git tag "${TAG}"
+          git push origin "${TAG}"
+
+      - name: Preflight publish checks
+        run: |
+          cargo fetch --locked
+          cargo publish --dry-run
+
+      # Trusted Publishing via OIDC: no CARGO_REGISTRY_TOKEN is needed.
+      # Make sure the crate is configured on crates.io with a GitHub publisher link.
+      - name: Publish
+        run: cargo publish
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-24.04
+    environment: release
+    needs: publish
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@aec2ec56f94eb8180ceec724245f64ef008b89f5  # v2.4.0
+        with:
+          tag_name: ${{ needs.publish.outputs.tag }}
+          name: ${{ needs.publish.outputs.tag }}
+          body: |
+            Release ${{ needs.publish.outputs.version }} published to crates.io.
+            Crate on crates.io: https://crates.io/crates/container-device-interface
