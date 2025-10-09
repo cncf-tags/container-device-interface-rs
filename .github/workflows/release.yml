@@ -36,7 +36,10 @@ jobs:
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
         with:
           toolchain: ${{ inputs.rust_toolchain }}
-          
+
+      - name: Authenticate to crates.io (OIDC)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@e919bc7605cde86df457cf5b93c5e103838bd879
       - name: Derive version from Cargo.toml and create tag
         id: version
         shell: bash
@@ -57,6 +60,8 @@ jobs:
       # Make sure the crate is configured on crates.io with a GitHub publisher link.
       - name: Publish
         run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   release:
     name: Create GitHub Release
