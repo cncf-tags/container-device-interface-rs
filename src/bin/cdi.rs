@@ -1,4 +1,4 @@
-extern crate cdi;
+extern crate container_device_interface as cdi;
 mod cdi_ops;
 
 use anyhow::Result;

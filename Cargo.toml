@@ -1,11 +1,11 @@
 [package]
-name = "cdi"
+name = "container-device-interface"
 version = "0.1.0"
 edition = "2021"
 license-file = "LICENSE"
 description = "CDI (Container Device Interface), is a specification, for container-runtimes, to support third-party devices."
-repository = "https://hub.apw.app/zvonkok/container-device-interface-rs"
-homepage = "https://hub.apw.app/cncf-tags/container-device-interface"
+repository = "https://github.com/cncf-tags/container-device-interface-rs"
+homepage = "https://github.com/cncf-tags/container-device-interface"
 readme = "README.md"
 categories = ["command-line-utilities"]
 keywords = ["container"]
