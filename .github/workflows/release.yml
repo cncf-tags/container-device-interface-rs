@@ -1,7 +1,7 @@
 name: Release and Publish Rust Crate
 
 on:
-  workflow_call:
+  workflow_dispatch:
     inputs:
       rust_toolchain:
         description: "Rust toolchain channel (e.g., stable, 1.81.0)"
