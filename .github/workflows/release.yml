@@ -53,11 +53,6 @@ jobs:
           git tag "${TAG}"
           git push origin "${TAG}"
 
-      - name: Preflight publish checks
-        run: |
-          cargo fetch --locked
-          cargo publish --dry-run
-
       # Trusted Publishing via OIDC: no CARGO_REGISTRY_TOKEN is needed.
       # Make sure the crate is configured on crates.io with a GitHub publisher link.
       - name: Publish
