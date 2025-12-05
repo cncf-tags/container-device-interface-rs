@@ -2,7 +2,7 @@
 name = "container-device-interface"
 version = "0.1.1"
 edition = "2021"
-license-file = "LICENSE"
+license = "Apache-2.0"
 description = "CDI (Container Device Interface), is a specification, for container-runtimes, to support third-party devices."
 repository = "https://github.com/cncf-tags/container-device-interface-rs"
 homepage = "https://github.com/cncf-tags/container-device-interface"
