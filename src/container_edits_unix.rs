@@ -147,7 +147,10 @@ mod tests {
 
     #[test]
     fn test_fill_missing_info_block_device_large_major_minor() {
-        assert!(is_root(), "needs root");
+        if !is_root() {
+            println!("INFO: skipping, needs root");
+            return;
+        }
 
         let temp_dir = TempDir::new().unwrap();
         let block_device_path = temp_dir
