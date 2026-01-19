@@ -141,8 +141,37 @@ mod tests {
         assert!(dev_node.fill_missing_info().is_ok());
 
         assert_eq!(dev_node.node.r#type, Some(DeviceType::Char.to_string()));
-        assert_eq!(dev_node.node.major, Some(1));
+        assert_eq!(dev_node.node.major, Some(2));
         assert_eq!(dev_node.node.minor, Some(2));
+    }
+
+    #[test]
+    fn test_fill_missing_info_block_device_large_major_minor() {
+        assert!(is_root(), "needs root");
+
+        let temp_dir = TempDir::new().unwrap();
+        let block_device_path = temp_dir
+            .path()
+            .join("block_device_large")
+            .display()
+            .to_string();
+
+        let dev = libc::makedev(259, 513) as u64;
+        let res = create_device(&block_device_path, 0o666, dev, "b");
+        assert!(res.is_ok(), "Failed to create block device: {:?}", res);
+
+        let mut dev_node = DeviceNode {
+            node: CDIDeviceNode {
+                path: block_device_path,
+                ..Default::default()
+            },
+        };
+
+        assert!(dev_node.fill_missing_info().is_ok());
+
+        assert_eq!(dev_node.node.r#type, Some(DeviceType::Block.to_string()));
+        assert_eq!(dev_node.node.major, Some(259));
+        assert_eq!(dev_node.node.minor, Some(513));
     }
 
     #[test]
