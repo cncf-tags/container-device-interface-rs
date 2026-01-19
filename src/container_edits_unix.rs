@@ -27,23 +27,20 @@ impl fmt::Display for DeviceType {
 // deviceInfoFromPath takes the path to a device and returns its type, major and minor device numbers.
 // It was adapted from https://github.com/opencontainers/runc/blob/v1.1.9/libcontainer/devices/device_unix.go#L30-L69
 pub fn device_info_from_path<P: AsRef<Path>>(path: P) -> Result<(String, i64, i64)> {
-    let major = |dev: u64| -> i64 { (dev >> 8) as i64 & 0xff };
-    let minor = |dev: u64| -> i64 { dev as i64 & 0xff };
-
     let metadata = std::fs::metadata(path)?;
     let file_type = metadata.file_type();
 
     let (dev_type, major, minor) = if file_type.is_block_device() {
         (
             DeviceType::Block.to_string(),
-            major(metadata.rdev()),
-            minor(metadata.rdev()),
+            libc::major(metadata.rdev()),
+            libc::minor(metadata.rdev()),
         )
     } else if file_type.is_char_device() {
         (
             DeviceType::Char.to_string(),
-            major(metadata.rdev()),
-            minor(metadata.rdev()),
+            libc::major(metadata.rdev()),
+            libc::minor(metadata.rdev()),
         )
     } else if file_type.is_fifo() {
         (DeviceType::Fifo.to_string(), 0, 0)
@@ -51,7 +48,7 @@ pub fn device_info_from_path<P: AsRef<Path>>(path: P) -> Result<(String, i64, i6
         return Err(Error::new(ErrorKind::InvalidInput, "It's not a device node").into());
     };
 
-    Ok((dev_type, major, minor))
+    Ok((dev_type, major.into(), minor.into()))
 }
 
 #[cfg(test)]
@@ -144,8 +141,40 @@ mod tests {
         assert!(dev_node.fill_missing_info().is_ok());
 
         assert_eq!(dev_node.node.r#type, Some(DeviceType::Char.to_string()));
-        assert_eq!(dev_node.node.major, Some(1));
+        assert_eq!(dev_node.node.major, Some(2));
         assert_eq!(dev_node.node.minor, Some(2));
+    }
+
+    #[test]
+    fn test_fill_missing_info_block_device_large_major_minor() {
+        if !is_root() {
+            println!("INFO: skipping, needs root");
+            return;
+        }
+
+        let temp_dir = TempDir::new().unwrap();
+        let block_device_path = temp_dir
+            .path()
+            .join("block_device_large")
+            .display()
+            .to_string();
+
+        let dev = libc::makedev(259, 513) as u64;
+        let res = create_device(&block_device_path, 0o666, dev, "b");
+        assert!(res.is_ok(), "Failed to create block device: {:?}", res);
+
+        let mut dev_node = DeviceNode {
+            node: CDIDeviceNode {
+                path: block_device_path,
+                ..Default::default()
+            },
+        };
+
+        assert!(dev_node.fill_missing_info().is_ok());
+
+        assert_eq!(dev_node.node.r#type, Some(DeviceType::Block.to_string()));
+        assert_eq!(dev_node.node.major, Some(259));
+        assert_eq!(dev_node.node.minor, Some(513));
     }
 
     #[test]
