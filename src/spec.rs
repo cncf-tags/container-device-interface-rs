@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fs::File, path::PathBuf};
+use std::{collections::BTreeMap, path::PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use oci_spec::runtime as oci;
@@ -15,7 +15,10 @@ use crate::{
     parser::validate_vendor_name,
     specs::config::Spec as CDISpec,
     utils::is_cdi_spec,
-    version::{minimum_required_version, VersionWrapper, VALID_SPEC_VERSIONS},
+    version::{
+        minimum_required_version, validate_declared_version_fields, VersionWrapper,
+        VALID_SPEC_VERSIONS,
+    },
 };
 
 const DEFAULT_SPEC_EXT_SUFFIX: &str = ".yaml";
@@ -99,6 +102,10 @@ impl Spec {
             devices.insert(d.name.clone(), dev);
         }
 
+        if devices.is_empty() {
+            return Err(anyhow::anyhow!("invalid spec, no devices"));
+        }
+
         Ok(devices)
     }
 
@@ -118,16 +125,16 @@ pub fn parse_spec(path: &PathBuf) -> Result<CDISpec> {
         return Err(anyhow!("CDI spec path not found"));
     }
 
-    let config_file = File::open(path).context("open config file")?;
-    let cdi_spec: CDISpec =
-        serde_yaml::from_reader(config_file).context("serde yaml read from file")?;
+    let data = std::fs::read(path).context("read config file")?;
+    let cdi_spec: CDISpec = serde_yaml::from_slice(&data).context("serde yaml read from file")?;
 
     Ok(cdi_spec)
 }
 
 // validate_spec validates the Spec using the extneral validator.
-pub fn validate_spec(_raw_spec: &CDISpec) -> Result<()> {
-    // TODO
+pub fn validate_spec(raw_spec: &CDISpec) -> Result<()> {
+    let data = serde_yaml::to_string(raw_spec).context("marshal CDI spec for schema validation")?;
+    crate::schema::validate_builtin(data.as_bytes()).context("invalid CDI Spec schema")?;
     Ok(())
 }
 
@@ -145,6 +152,10 @@ pub fn read_spec(path: &PathBuf, priority: i32) -> Result<Spec> {
 // Spec is marked as loaded from the given path with the given
 // priority. If Spec data validation fails new_spec returns an error.
 pub fn new_spec(raw_spec: &CDISpec, path: &PathBuf, priority: i32) -> Result<Spec> {
+    if raw_spec.devices.is_empty() {
+        return Err(anyhow::anyhow!("invalid spec, no devices"));
+    }
+
     validate_spec(raw_spec).context("invalid CDI Spec")?;
 
     let mut cleaned_path = clean(path);
@@ -173,6 +184,8 @@ fn validate_version(cdi_spec: &CDISpec) -> Result<()> {
         return Err(anyhow::anyhow!("invalid version {}", version));
     }
 
+    validate_declared_version_fields(cdi_spec)?;
+
     let min_version = minimum_required_version(cdi_spec)
         .with_context(|| "could not determine minimum required version")?;
 
@@ -184,4 +197,78 @@ fn validate_version(cdi_spec: &CDISpec) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oci_spec::runtime as oci;
+    use std::path::PathBuf;
+
+    #[test]
+    fn parse_spec_rejects_unknown_fields() {
+        let path = PathBuf::from("tests/fixtures/cdi-unknown-field.yaml");
+        let err = parse_spec(&path).expect_err("unknown field should fail");
+        assert!(err.to_string().contains("serde yaml read from file"));
+    }
+
+    #[test]
+    fn new_spec_rejects_empty_devices() {
+        let path = PathBuf::from("tests/fixtures/cdi-empty-devices.yaml");
+        let raw = parse_spec(&path).expect("empty device fixture parses");
+        let err = new_spec(&raw, &path, 0).expect_err("empty devices should fail");
+        assert!(err.to_string().contains("no devices"));
+    }
+
+    #[test]
+    fn new_spec_rejects_legacy_intel_rdt_fields_in_v1_1() {
+        let path = PathBuf::from("tests/fixtures/cdi-v1.1-legacy-intel-rdt.yaml");
+        let raw = parse_spec(&path).expect("legacy fields should parse before version validation");
+        let err = new_spec(&raw, &path, 0).expect_err("v1.1.0 should reject legacy fields");
+
+        assert!(format!("{err:#}").contains("enableCMT"));
+    }
+
+    #[test]
+    fn new_spec_processes_legacy_intel_rdt_fields_before_v1_1() {
+        let path = PathBuf::from("tests/fixtures/cdi-v1.0-legacy-intel-rdt.yaml");
+        let raw = parse_spec(&path).expect("v1.0.0 legacy Intel RDT fixture parses");
+        let mut spec = new_spec(&raw, &path, 0).expect("v1.0.0 legacy Intel RDT fixture validates");
+        let mut oci_spec = oci::Spec::default();
+
+        spec.apply_edits(&mut oci_spec)
+            .expect("legacy Intel RDT edits apply");
+
+        let rdt = oci_spec
+            .linux()
+            .as_ref()
+            .and_then(|linux| linux.intel_rdt().as_ref())
+            .expect("Intel RDT should be set");
+
+        #[allow(deprecated)]
+        {
+            assert_eq!(&Some(true), rdt.enable_cmt());
+            assert_eq!(&Some(true), rdt.enable_mbm());
+        }
+    }
+
+    #[test]
+    fn new_spec_rejects_empty_device_edits() {
+        let raw = CDISpec {
+            version: "1.1.0".to_string(),
+            kind: "vendor.com/device".to_string(),
+            devices: vec![crate::specs::config::Device {
+                name: "gpu0".to_string(),
+                container_edits: crate::specs::config::ContainerEdits::default(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let path = PathBuf::from("/tmp/vendor-device.yaml");
+
+        let err = new_spec(&raw, &path, 0).expect_err("empty device edits should fail");
+        let err = format!("{err:?}");
+
+        assert!(err.contains("empty device edits"), "{err}");
+    }
 }

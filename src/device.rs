@@ -72,8 +72,7 @@ impl Device {
     }
     // apply_edits applies the device-speific container edits to an OCI Spec.
     pub fn apply_edits(&mut self, oci_spec: &mut oci::Spec) -> Result<()> {
-        let _ = self.edits().apply(oci_spec);
-
+        self.edits().apply(oci_spec)?;
         Ok(())
     }
 
@@ -94,6 +93,9 @@ impl Device {
         }
 
         let edits = self.edits();
+        if edits.is_empty() {
+            return Err(anyhow!("invalid device, empty device edits"));
+        }
         edits
             .validate()
             .context(format!("invalid device {:?} ", self.cdi_device.name))?;

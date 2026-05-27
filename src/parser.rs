@@ -134,12 +134,22 @@ pub(crate) fn validate_vendor_or_class_name(name: &str) -> Result<()> {
     if name.is_empty() {
         return Err(anyhow!("empty name"));
     }
-    if !name.chars().next().unwrap_or_default().is_alphabetic() {
+    if !name.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
         return Err(anyhow!("name should start with a letter"));
     }
+    if !name
+        .chars()
+        .last()
+        .is_some_and(|c| c.is_ascii_alphanumeric())
+    {
+        return Err(anyhow!("name should end with a letter or digit"));
+    }
+    let char_count = name.chars().count();
     if let Some(c) = name
         .chars()
-        .find(|&c| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.')
+        .skip(1)
+        .take(char_count.saturating_sub(2))
+        .find(|&c| !c.is_ascii_alphanumeric() && c != '-' && c != '_' && c != '.')
     {
         return Err(anyhow!("invalid character '{}' in name {}", c, name));
     }
@@ -155,9 +165,26 @@ pub(crate) fn validate_device_name(name: &str) -> Result<()> {
     if name.is_empty() {
         return Err(anyhow!("empty name"));
     }
+    if !name
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric())
+    {
+        return Err(anyhow!("name should start with a letter or digit"));
+    }
+    if !name
+        .chars()
+        .last()
+        .is_some_and(|c| c.is_ascii_alphanumeric())
+    {
+        return Err(anyhow!("name should end with a letter or digit"));
+    }
+    let char_count = name.chars().count();
     if let Some(c) = name
         .chars()
-        .find(|&c| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.' && c != ':')
+        .skip(1)
+        .take(char_count.saturating_sub(2))
+        .find(|&c| !c.is_ascii_alphanumeric() && c != '-' && c != '_' && c != '.' && c != ':')
     {
         return Err(anyhow!("invalid character '{}' in device name {}", c, name));
     }
@@ -244,5 +271,14 @@ mod tests {
 
         let name = "nvi((dia.com";
         assert!(parser::validate_vendor_or_class_name(name).is_err());
+    }
+
+    #[test]
+    fn validate_names_require_alphanumeric_endpoints() {
+        assert!(parser::validate_vendor_name("vendor.com").is_ok());
+        assert!(parser::validate_vendor_name("vendor.").is_err());
+        assert!(parser::validate_class_name("gpu-").is_err());
+        assert!(parser::validate_device_name("_gpu").is_err());
+        assert!(parser::validate_device_name("gpu_").is_err());
     }
 }

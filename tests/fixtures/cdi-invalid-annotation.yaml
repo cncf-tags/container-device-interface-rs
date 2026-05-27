@@ -1,0 +1,9 @@
+cdiVersion: "1.1.0"
+kind: "vendor.com/device"
+annotations:
+  "inva$$lid_CDIKEY": "value"
+devices:
+  - name: "gpu0"
+    containerEdits:
+      deviceNodes:
+        - path: "/dev/null"

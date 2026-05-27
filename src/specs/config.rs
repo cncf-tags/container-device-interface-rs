@@ -5,10 +5,11 @@ use libc::mode_t;
 use serde::{Deserialize, Serialize};
 
 // CurrentVersion is the current version of the Spec.
-pub const CURRENT_VERSION: &str = "0.7.0";
+pub const CURRENT_VERSION: &str = "1.1.0";
 
 // Spec is the base configuration for CDI
 #[derive(Clone, Debug, Default, Eq, PartialEq, Hash, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Spec {
     #[serde(rename = "cdiVersion")]
     pub(crate) version: String,
@@ -32,6 +33,7 @@ pub struct Spec {
 
 // Device is a "Device" a container runtime can add to a container
 #[derive(Clone, Debug, Default, Eq, PartialEq, Hash, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Device {
     #[serde(rename = "name")]
     pub(crate) name: String,
@@ -49,12 +51,16 @@ pub struct Device {
 
 // ContainerEdits are edits a container runtime must make to the OCI spec to expose the device.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Hash, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContainerEdits {
     #[serde(rename = "env", skip_serializing_if = "Option::is_none")]
     pub env: Option<Vec<String>>,
 
     #[serde(rename = "deviceNodes", skip_serializing_if = "Option::is_none")]
     pub device_nodes: Option<Vec<DeviceNode>>,
+
+    #[serde(rename = "netDevices", skip_serializing_if = "Option::is_none")]
+    pub(crate) net_devices: Option<Vec<LinuxNetDevice>>,
 
     #[serde(rename = "hooks", skip_serializing_if = "Option::is_none")]
     pub hooks: Option<Vec<Hook>>,
@@ -71,6 +77,7 @@ pub struct ContainerEdits {
 
 // DeviceNode represents a device node that needs to be added to the OCI spec.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Hash, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeviceNode {
     #[serde(rename = "path")]
     pub(crate) path: String,
@@ -102,6 +109,7 @@ pub struct DeviceNode {
 
 // Mount represents a mount that needs to be added to the OCI spec.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Hash, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Mount {
     #[serde(rename = "hostPath")]
     pub(crate) host_path: String,
@@ -118,6 +126,7 @@ pub struct Mount {
 
 // Hook represents a hook that needs to be added to the OCI spec.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Hash, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Hook {
     #[serde(rename = "hookName")]
     pub(crate) hook_name: String,
@@ -137,6 +146,7 @@ pub struct Hook {
 
 // IntelRdt describes the Linux IntelRdt parameters to set in the OCI spec.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Hash, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct IntelRdt {
     #[serde(rename = "closID", skip_serializing_if = "Option::is_none")]
     pub(crate) clos_id: Option<String>,
@@ -147,9 +157,26 @@ pub struct IntelRdt {
     #[serde(rename = "memBwSchema", skip_serializing_if = "Option::is_none")]
     pub(crate) mem_bw_schema: Option<String>,
 
-    #[serde(default, rename = "enableCMT")]
-    pub(crate) enable_cmt: bool,
+    #[serde(rename = "schemata", skip_serializing_if = "Option::is_none")]
+    pub(crate) schemata: Option<Vec<String>>,
 
-    #[serde(default, rename = "enableMBM")]
-    pub(crate) enable_mbm: bool,
+    #[serde(rename = "enableMonitoring", skip_serializing_if = "Option::is_none")]
+    pub(crate) enable_monitoring: Option<bool>,
+
+    #[serde(rename = "enableCMT", skip_serializing_if = "Option::is_none")]
+    pub(crate) enable_cmt: Option<bool>,
+
+    #[serde(rename = "enableMBM", skip_serializing_if = "Option::is_none")]
+    pub(crate) enable_mbm: Option<bool>,
+}
+
+// LinuxNetDevice represents an OCI LinuxNetDevice to be added to the OCI Spec.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LinuxNetDevice {
+    #[serde(rename = "hostInterfaceName")]
+    pub(crate) host_interface_name: String,
+
+    #[serde(rename = "name")]
+    pub(crate) name: String,
 }

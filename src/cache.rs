@@ -294,3 +294,72 @@ impl Cache {
         HashMap::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        spec::new_spec,
+        specs::config::{
+            ContainerEdits as CDIContainerEdits, Device as CDIDevice, DeviceNode, IntelRdt,
+            Spec as CDISpec,
+        },
+    };
+    use oci_spec::runtime::Spec as OCISpec;
+    use std::{collections::HashMap, path::PathBuf};
+
+    #[test]
+    fn inject_devices_preserves_spec_level_intel_rdt_with_device_edits() {
+        let raw = CDISpec {
+            version: "1.1.0".to_string(),
+            kind: "vendor.com/device".to_string(),
+            container_edits: Some(CDIContainerEdits {
+                intel_rdt: Some(IntelRdt {
+                    clos_id: Some("global-class".to_string()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            devices: vec![CDIDevice {
+                name: "gpu0".to_string(),
+                container_edits: CDIContainerEdits {
+                    device_nodes: Some(vec![DeviceNode {
+                        path: "/dev/null".to_string(),
+                        r#type: Some("c".to_string()),
+                        major: Some(1),
+                        minor: Some(3),
+                        ..Default::default()
+                    }]),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let spec = new_spec(&raw, &PathBuf::from("/tmp/vendor-device.yaml"), 0).unwrap();
+        let device = spec.get_device("gpu0").unwrap().clone();
+        let mut devices = HashMap::new();
+        devices.insert(device.get_qualified_name(), device);
+        let mut cache = Cache::new(Vec::new(), HashMap::new(), devices);
+        let mut oci_spec = OCISpec::default();
+
+        cache
+            .inject_devices(
+                Some(&mut oci_spec),
+                vec!["vendor.com/device=gpu0".to_string()],
+            )
+            .unwrap();
+
+        let intel_rdt = oci_spec
+            .linux()
+            .as_ref()
+            .unwrap()
+            .intel_rdt()
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            Some(&"global-class".to_string()),
+            intel_rdt.clos_id().as_ref()
+        );
+    }
+}
