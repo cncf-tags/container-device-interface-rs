@@ -77,18 +77,26 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The runner is persistent, so a patch appended by a previous run is
-          # still in the manifest - appending again would stack duplicate
-          # entries and break the build. Reset the whole directory rather
-          # than naming files: Cargo.lock is not tracked at every kata tag,
-          # and a missing pathspec makes git fail the job.
-          manifest="${KATA_SRC_DIR}/src/agent/Cargo.toml"
-          git -C "${KATA_SRC_DIR}" checkout -- src/agent/
+          # The kata repo is one root workspace (Cargo.toml at the repo
+          # top); cargo IGNORES [patch] in member manifests such as
+          # src/agent/Cargo.toml ("patch for the non root package will be
+          # ignored"), which silently builds the crates.io release instead
+          # of the PR - so the patch must go into the root manifest.
+          manifest="${KATA_SRC_DIR}/Cargo.toml"
+
+          # The runner is persistent, so a patch appended by a previous run
+          # is still there - appending again would stack duplicate entries
+          # and break the build. Reset to the pristine tag first. The lock
+          # reset is best-effort: it is not tracked at every kata tag.
+          git -C "${KATA_SRC_DIR}" checkout -- Cargo.toml
+          git -C "${KATA_SRC_DIR}" checkout -- Cargo.lock 2>/dev/null || true
 
           # [patch.crates-io] rather than editing dependency declarations:
-          # the agent pulls the crates.io release, and a patch at the
-          # workspace root transparently redirects every workspace member to
-          # the PR checkout without touching kata's own manifests.
+          # a patch at the workspace root transparently redirects every
+          # workspace member to the PR checkout without touching kata's own
+          # dependency declarations. The containerized agent build
+          # re-resolves dependencies itself, so no host-side cargo update is
+          # needed.
           patch_line="container-device-interface = { path = \"${GITHUB_WORKSPACE}\" }"
           if grep -q '^\[patch\.crates-io\]' "${manifest}"; then
             sed -i "/^\[patch\.crates-io\]/a ${patch_line}" "${manifest}"
@@ -97,16 +105,8 @@ jobs:
           fi
 
           # Leave evidence in the log of exactly which code was under test.
-          echo "=== agent manifest patch ==="
+          echo "=== workspace manifest patch ==="
           tail -n 5 "${manifest}"
-
-          # Refresh the agent lockfile for the patched dependency; harmless if
-          # the build does not use --locked, required if it does. Best-effort:
-          # a failure here surfaces properly in the agent build below.
-          if command -v cargo >/dev/null 2>&1; then
-            (cd "${KATA_SRC_DIR}/src/agent" && cargo update -p container-device-interface) \
-              || echo "WARNING: cargo update -p container-device-interface failed; relying on the agent build to re-resolve"
-          fi
 
       - name: Build kata-agent with the patched CDI crate
         run: |
