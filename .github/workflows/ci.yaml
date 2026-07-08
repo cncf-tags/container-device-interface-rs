@@ -173,12 +173,14 @@ jobs:
           # VFIO device and wired it into the container.
           # The config_path annotation selects OUR kata config; without it
           # the shim reads the default configuration.toml, which belongs to
-          # the NVRC CI and boots NVRC's image.
+          # the NVRC CI and boots NVRC's image. nerdctl propagates --label
+          # values into OCI annotations, which is where the kata shim reads
+          # them (--annotation only exists in newer nerdctl).
           # set +e so the assertions below run on the captured output even
           # when nerdctl fails.
           set +e
           output=$(sudo nerdctl run --runtime io.containerd.kata.v2 \
-            --annotation "io.katacontainers.config_path=${KATA_CONFIG}" \
+            --label "io.katacontainers.config_path=${KATA_CONFIG}" \
             --device /dev/vfio/devices/vfio1 --rm ubuntu -- sh -c "nvidia-smi; dmesg" 2>&1)
           exit_code=$?
           set -e
