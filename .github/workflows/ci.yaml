@@ -60,6 +60,10 @@ env:
   KATA_SRC_DIR: /home/container-device-interface-rs/actions-runner/_work/kata-containers
   ROOTFS_IMAGE_DIR: /home/container-device-interface-rs/actions-runner/_work/kata-containers/build/rootfs-image-nvidia-gpu/builddir/rootfs-image/ubuntu_rootfs
   IMAGE_BUILDER_DIR: /home/container-device-interface-rs/actions-runner/_work/kata-containers/tools/osbuilder/image-builder
+  # Dedicated kata config for this CI: the default configuration.toml
+  # belongs to the NVRC CI and boots NVRC's image. Selected per container
+  # via the io.katacontainers.config_path annotation.
+  KATA_CONFIG: /etc/kata-containers/configuration.toml.container-device-interface-rs
 
 jobs:
   run-e2e-nerdctl-tests:
@@ -76,6 +80,16 @@ jobs:
       - name: Point the kata-agent at the PR's CDI code
         run: |
           set -euo pipefail
+
+          # The agent build runs in a container that bind-mounts ONLY the
+          # kata tree - a patch pointing at ${GITHUB_WORKSPACE} fails there
+          # with "No such file or directory". The PR checkout is therefore
+          # copied into the kata tree for the duration of the run (removed
+          # and re-created each run, so nothing accumulates).
+          cdi_copy="${KATA_SRC_DIR}/container-device-interface-rs"
+          rm -rf "${cdi_copy}"
+          cp -a "${GITHUB_WORKSPACE}/." "${cdi_copy}"
+          rm -rf "${cdi_copy}/target" # defensive: never ship stale build output
 
           # The kata repo is one root workspace (Cargo.toml at the repo
           # top); cargo IGNORES [patch] in member manifests such as
@@ -94,10 +108,11 @@ jobs:
           # [patch.crates-io] rather than editing dependency declarations:
           # a patch at the workspace root transparently redirects every
           # workspace member to the PR checkout without touching kata's own
-          # dependency declarations. The containerized agent build
-          # re-resolves dependencies itself, so no host-side cargo update is
-          # needed.
-          patch_line="container-device-interface = { path = \"${GITHUB_WORKSPACE}\" }"
+          # dependency declarations. Relative path: it resolves both on the
+          # host and inside the build container regardless of mount prefix.
+          # The containerized agent build re-resolves dependencies itself,
+          # so no host-side cargo update is needed.
+          patch_line="container-device-interface = { path = \"container-device-interface-rs\" }"
           if grep -q '^\[patch\.crates-io\]' "${manifest}"; then
             sed -i "/^\[patch\.crates-io\]/a ${patch_line}" "${manifest}"
           else
@@ -156,10 +171,15 @@ jobs:
           # nvidia-smi succeeding inside the container is the end-to-end
           # proof: the agent (built with the PR's CDI crate) resolved the
           # VFIO device and wired it into the container.
+          # The config_path annotation selects OUR kata config; without it
+          # the shim reads the default configuration.toml, which belongs to
+          # the NVRC CI and boots NVRC's image.
           # set +e so the assertions below run on the captured output even
           # when nerdctl fails.
           set +e
-          output=$(sudo nerdctl run --runtime io.containerd.kata.v2 --device /dev/vfio/devices/vfio1 --rm ubuntu -- sh -c "nvidia-smi; dmesg" 2>&1)
+          output=$(sudo nerdctl run --runtime io.containerd.kata.v2 \
+            --annotation "io.katacontainers.config_path=${KATA_CONFIG}" \
+            --device /dev/vfio/devices/vfio1 --rm ubuntu -- sh -c "nvidia-smi; dmesg" 2>&1)
           exit_code=$?
           set -e
 
@@ -194,9 +214,9 @@ jobs:
         run: |
           set -uo pipefail
 
-          echo "::group::configuration.toml (relevant lines)"
+          echo "::group::kata config (relevant lines) - ${KATA_CONFIG}"
           sudo grep -nE '^[[:space:]]*(enable_debug|debug_console_enabled|create_container_timeout|dial_timeout|kernel|initrd|image|path|kernel_params|sandbox_cgroup_only)\b' \
-            /etc/kata-containers/configuration.toml || true
+            "${KATA_CONFIG}" || true
           echo "::endgroup::"
 
           echo "::group::kata shim version"
