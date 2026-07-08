@@ -87,9 +87,11 @@ jobs:
 
           # The runner is persistent, so a patch appended by a previous run is
           # still in the manifest - appending again would stack duplicate
-          # entries and break the build. Reset to the pristine tag first.
+          # entries and break the build. Reset the whole directory rather
+          # than naming files: Cargo.lock is not tracked at every kata tag,
+          # and a missing pathspec makes git fail the job.
           manifest="${KATA_SRC_DIR}/src/agent/Cargo.toml"
-          git -C "${KATA_SRC_DIR}" checkout -- src/agent/Cargo.toml src/agent/Cargo.lock
+          git -C "${KATA_SRC_DIR}" checkout -- src/agent/
 
           # [patch.crates-io] rather than editing dependency declarations:
           # the agent pulls the crates.io release, and a patch at the
