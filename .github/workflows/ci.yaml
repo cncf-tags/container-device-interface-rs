@@ -81,9 +81,14 @@ jobs:
           # root-owned files behind between update-kata provisioning runs,
           # and permission probes are unreliable (a dir can be writable but
           # not searchable, which a -w guard misses - it broke this job).
-          # chown is metadata-only and idempotent, so it costs seconds
-          # against a multi-minute agent build.
+          # Both are metadata-only and idempotent, seconds against a
+          # multi-minute agent build.
           sudo chown -R "$(id -u)":"$(id -g)" "${KATA_SRC_DIR}"
+          # chown fixes the owner but not the mode: a dir without its
+          # owner-execute bit (as tar/container extraction can create) stays
+          # un-enterable even for the owner. u+rwX adds search only to
+          # directories, never execute to plain files.
+          sudo chmod -R u+rwX "${KATA_SRC_DIR}"
 
           # Belt-and-braces against "dubious ownership" if anything above is
           # ever skipped. The guard keeps the global config from accumulating
