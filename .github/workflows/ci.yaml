@@ -120,6 +120,15 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Self-heal ownership: containerized builds leave root-owned files
+          # behind between update-kata provisioning runs, and a root-owned
+          # build/ blocks cd, rm and make for the runner user. Guarded so it
+          # costs nothing when ownership is already correct; update-kata
+          # remains the canonical fix at provisioning time.
+          if [[ ! -w "${KATA_SRC_DIR}/build" ]]; then
+            sudo chown -R "$(id -u)":"$(id -g)" "${KATA_SRC_DIR}"
+          fi
+
           cd "${KATA_SRC_DIR}/build"
 
           # Leftover artifacts from a previous run would let make skip the
