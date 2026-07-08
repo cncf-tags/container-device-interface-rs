@@ -52,12 +52,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master (2026-06-30)
-        with:
-          toolchain: stable
+      - name: Install pinned Rust toolchain
+        uses: ./.github/actions/rust-toolchain
 
-      - run: cargo test --all-features
+      - run: cargo test --locked --all-features
 
   # Check code formatting against Rust style guidelines
   formatting:
@@ -71,10 +69,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master (2026-06-30)
+      - name: Install pinned Rust toolchain
+        uses: ./.github/actions/rust-toolchain
         with:
-          toolchain: stable
           components: rustfmt
 
       - run: cargo fmt --all -- --check
@@ -91,13 +88,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master (2026-06-30)
+      - name: Install pinned Rust toolchain
+        uses: ./.github/actions/rust-toolchain
         with:
-          toolchain: stable
           components: clippy
 
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
   # Check dependencies for known security vulnerabilities
   security:
@@ -111,10 +107,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master (2026-06-30)
-        with:
-          toolchain: stable
+      - name: Install pinned Rust toolchain
+        uses: ./.github/actions/rust-toolchain
 
       - run: cargo install cargo-audit --locked
       - run: cargo audit
@@ -131,10 +125,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master (2026-06-30)
-        with:
-          toolchain: stable
+      - name: Install pinned Rust toolchain
+        uses: ./.github/actions/rust-toolchain
 
       - run: cargo install cargo-deny --locked
       - run: cargo deny check
@@ -151,13 +143,16 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install Rust toolchain
+      - name: Install Rust nightly
+        # WHY toolchain input: a SHA-pinned ref no longer selects the channel
         uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master (2026-06-30)
         with:
           toolchain: nightly
 
-      - run: cargo install cargo-udeps --locked
-      - run: cargo udeps --all-features
+      # +nightly: a bare cargo would resolve to the rust-toolchain.toml pin
+      - run: cargo +nightly install cargo-udeps --locked
+      # udeps needs nightly-only -Z flags
+      - run: cargo +nightly udeps --locked --all-features
 
   # Analyze binary size and identify largest functions
   bloat:
@@ -171,10 +166,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master (2026-06-30)
-        with:
-          toolchain: stable
+      - name: Install pinned Rust toolchain
+        uses: ./.github/actions/rust-toolchain
 
       - run: cargo install cargo-bloat --locked
       - run: cargo bloat --release --all-features -n 20
@@ -182,6 +175,7 @@ jobs:
   # Detect undefined behavior in unsafe code using Miri interpreter
   miri:
     name: cargo miri
+    timeout-minutes: 30
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' || github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
@@ -191,14 +185,16 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install Rust toolchain
+      - name: Install Rust nightly
+        # WHY toolchain input: a SHA-pinned ref no longer selects the channel
         uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master (2026-06-30)
         with:
           toolchain: nightly
           components: miri
 
-      # continue-on-error instead of `|| true`: miri is still experimental
-      # and complains about the std toolchain, but failures should stay
-      # visible in the UI rather than being silently swallowed.
-      - run: cargo miri test
-        continue-on-error: true
+      # +nightly outranks rust-toolchain.toml; miri only exists on nightly.
+      # -Zmiri-disable-isolation: tests touch the real filesystem. Blocking:
+      # the suite passes under miri (root-only FFI tests self-skip).
+      - run: cargo +nightly miri test --locked
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation

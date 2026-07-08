@@ -1,0 +1,8 @@
+# The compiler is a build input: rustc embeds /rustc/<commit-hash> stdlib
+# paths in the binary, so byte-reproducibility requires one pinned rustc.
+# It also keeps CI and local builds on the same lints - an unpinned
+# "stable" broke CI when clippy 1.96 shipped new lints. Bump in its own
+# commit.
+[toolchain]
+channel = "1.94.0"
+profile = "minimal"

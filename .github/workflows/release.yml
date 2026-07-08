@@ -2,12 +2,6 @@ name: Release and Publish Rust Crate
 
 on:
   workflow_dispatch:
-    inputs:
-      rust_toolchain:
-        description: "Rust toolchain channel (e.g., stable, 1.81.0)"
-        required: false
-        default: '1.85.1'
-        type: string
 
 # Default to no permissions; each job requests exactly what it needs.
 permissions: {}
@@ -34,10 +28,8 @@ jobs:
         with:
           fetch-depth: 0  # ensure tags/history are available
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
-        with:
-          toolchain: ${{ inputs.rust_toolchain }}
+      - name: Install pinned Rust toolchain
+        uses: ./.github/actions/rust-toolchain
 
       - name: Authenticate to crates.io (OIDC)
         id: auth
@@ -88,22 +80,23 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      - name: Install pinned Rust toolchain
+        uses: ./.github/actions/rust-toolchain
         with:
-          toolchain: ${{ inputs.rust_toolchain }}
+          targets: ${{ matrix.target }}
 
       - name: Build (${{ matrix.target }})
         shell: bash
+        # build-release.sh remaps machine-specific paths out of the binaries;
+        # the reproducible-build workflow double-builds with the same script,
+        # so the release bytes stay independently verifiable.
         run: |
           set -euxo pipefail
           mkdir -p dist
-          SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)
-          export SOURCE_DATE_EPOCH
-          cargo build --release
-          cp target/release/cdi dist/
-          cp target/release/validate dist/
-          cp target/release/libcontainer_device_interface.so dist/
+          ./scripts/build-release.sh "${{ matrix.target }}"
+          cp "target/${{ matrix.target }}/release/cdi" dist/
+          cp "target/${{ matrix.target }}/release/validate" dist/
+          cp "target/${{ matrix.target }}/release/libcontainer_device_interface.so" dist/
 
       - name: Package release tarball (reproducible)
         shell: bash

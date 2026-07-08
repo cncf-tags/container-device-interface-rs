@@ -44,3 +44,10 @@ const_format = "0.2.32"
 nix = "0.24.2"
 tempfile = "3.1.0"
 pretty_assertions = "1.0.0"
+
+[profile.release]
+opt-level = "z" # CLI tools and a cdylib: size beats speed
+lto = true
+codegen-units = 1 # one unit gives fat LTO full visibility and a smaller binary
+strip = true
+panic = "abort" # no unwind tables; safer across the cdylib FFI boundary too
