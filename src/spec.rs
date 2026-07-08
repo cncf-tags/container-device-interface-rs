@@ -179,7 +179,7 @@ fn validate_version(cdi_spec: &CDISpec) -> Result<()> {
     if min_version.is_greater_than(&VersionWrapper::new(version)) {
         return Err(anyhow::anyhow!(
             "the spec version must be at least v{}",
-            min_version.to_string()
+            min_version
         ));
     }
 
