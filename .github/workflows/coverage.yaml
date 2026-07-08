@@ -1,0 +1,84 @@
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+name: Code Coverage
+
+permissions:
+  contents: read
+
+jobs:
+  # Detect if only docs changed - skip CI if so. Named uniquely: other
+  # workflows also have a "Detect changes" job, and required status checks
+  # match check names globally.
+  changes:
+    name: Detect changes (coverage)
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        id: filter
+
+        with:
+          filters: |
+            code:
+              - '**/*.rs'
+              - '**/*.toml'
+              - '**/*.lock'
+              - 'Cargo.lock'
+              - '.cargo/**'
+              - '.github/workflows/coverage.yaml'
+
+  coverage:
+    name: Code coverage
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master (2026-06-30)
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+
+      # cargo-llvm-cov uses LLVM's native instrumentation for accurate coverage.
+      # Pinned >= 0.8 for --fail-under-lines support on the report subcommand.
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@4684b8405694ae9dd42c9f39ba901a70ae83f4a3 # v2.82.9
+        with:
+          tool: cargo-llvm-cov@0.8.7
+
+      - name: Generate coverage
+        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+
+      - name: Upload coverage to Coveralls
+        uses: coverallsapp/github-action@cfd0633edbd2411b532b808ba7a8b5e04f76d2c8 # v2.3.4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          file: lcov.info
+          format: lcov
+
+      # Gate after the upload so Coveralls still receives the report when the
+      # threshold fails. Current baseline is ~34% line coverage; the floor
+      # prevents regressions. Ratchet this up as coverage improves.
+      - name: Enforce minimum 30% line coverage
+        run: cargo llvm-cov report --fail-under-lines 30

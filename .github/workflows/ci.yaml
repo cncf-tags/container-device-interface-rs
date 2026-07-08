@@ -1,0 +1,240 @@
+# E2E test for the CDI crate inside the kata-agent.
+#
+# WHY this exists: unit tests can't prove the crate actually works where it
+# is consumed - inside the kata-agent, resolving a real VFIO device into a
+# real container in a real VM. So the PR's code is compiled into the agent,
+# baked into the guest image and exercised with GPU passthrough.
+#
+# WHY a self-hosted runner: GPU passthrough needs bare metal with GPUs bound
+# to vfio-pci and a full kata install - none of which hosted runners provide.
+name: Run the CDI CI
+on:
+  workflow_call:
+    inputs:
+      commit-hash:
+        required: true
+        type: string
+      pr-number:
+        required: true
+        type: string
+      tag:
+        required: true
+        type: string
+      target-branch:
+        required: false
+        type: string
+        default: ""
+  # Allow manual runs against an internal branch (no PR required).
+  # Inputs mirror workflow_call; commit-hash defaults to the dispatched ref.
+  workflow_dispatch:
+    inputs:
+      commit-hash:
+        description: "Commit SHA to test (defaults to dispatched ref)"
+        required: false
+        type: string
+        default: ""
+      pr-number:
+        description: "PR number (cosmetic for manual runs)"
+        required: false
+        type: string
+        default: "manual"
+      tag:
+        description: "Tag suffix for build artifacts"
+        required: false
+        type: string
+        default: "manual"
+      target-branch:
+        description: "Base branch (cosmetic for manual runs)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  # The kata-containers tree lives on the runner (user:
+  # container-device-interface-rs), pre-provisioned at a release tag, because
+  # cloning and building kata from scratch on every PR would dominate the CI
+  # time; only the agent is rebuilt per run.
+  KATA_SRC_DIR: /home/container-device-interface-rs/actions-runner/_work/kata-containers
+  ROOTFS_IMAGE_DIR: /home/container-device-interface-rs/actions-runner/_work/kata-containers/build/rootfs-image-nvidia-gpu/builddir/rootfs-image/ubuntu_rootfs
+  IMAGE_BUILDER_DIR: /home/container-device-interface-rs/actions-runner/_work/kata-containers/tools/osbuilder/image-builder
+
+jobs:
+  run-e2e-nerdctl-tests:
+    runs-on: g5g.metal
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # workflow_call always passes commit-hash; workflow_dispatch may
+          # leave it empty, in which case fall back to the dispatched ref.
+          ref: ${{ inputs.commit-hash != '' && inputs.commit-hash || github.sha }}
+          fetch-depth: 0 # This is needed in order to keep the commit ids history
+          persist-credentials: false
+
+      - name: Point the kata-agent at the PR's CDI code
+        run: |
+          set -euo pipefail
+
+          # The runner is persistent, so a patch appended by a previous run is
+          # still in the manifest - appending again would stack duplicate
+          # entries and break the build. Reset to the pristine tag first.
+          manifest="${KATA_SRC_DIR}/src/agent/Cargo.toml"
+          git -C "${KATA_SRC_DIR}" checkout -- src/agent/Cargo.toml src/agent/Cargo.lock
+
+          # [patch.crates-io] rather than editing dependency declarations:
+          # the agent pulls the crates.io release, and a patch at the
+          # workspace root transparently redirects every workspace member to
+          # the PR checkout without touching kata's own manifests.
+          patch_line="container-device-interface = { path = \"${GITHUB_WORKSPACE}\" }"
+          if grep -q '^\[patch\.crates-io\]' "${manifest}"; then
+            sed -i "/^\[patch\.crates-io\]/a ${patch_line}" "${manifest}"
+          else
+            printf '\n[patch.crates-io]\n%s\n' "${patch_line}" >> "${manifest}"
+          fi
+
+          # Leave evidence in the log of exactly which code was under test.
+          echo "=== agent manifest patch ==="
+          tail -n 5 "${manifest}"
+
+          # Refresh the agent lockfile for the patched dependency; harmless if
+          # the build does not use --locked, required if it does. Best-effort:
+          # a failure here surfaces properly in the agent build below.
+          if command -v cargo >/dev/null 2>&1; then
+            (cd "${KATA_SRC_DIR}/src/agent" && cargo update -p container-device-interface) \
+              || echo "WARNING: cargo update -p container-device-interface failed; relying on the agent build to re-resolve"
+          fi
+
+      - name: Build kata-agent with the patched CDI crate
+        run: |
+          set -euo pipefail
+
+          cd "${KATA_SRC_DIR}/build"
+
+          # Leftover artifacts from a previous run would let make skip the
+          # rebuild and ship yesterday's agent - the PR code would never be
+          # tested while the CI still reports green.
+          rm -rf agent kata-static-agent.tar.zst
+
+          # USE_CACHE=no for the same reason: with the cache on, the build
+          # downloads a prebuilt agent artifact from GitHub instead of
+          # compiling, so the patched CDI crate would silently never be built.
+          USE_CACHE=no make agent-tarball
+
+      - name: Unpack the new agent into the rootfs
+        run: |
+          set -euo pipefail
+
+          # Overlaying the agent tarball is the only mutation the rootfs
+          # needs - everything else (driver, systemd units) stays from the
+          # provisioned rootfs build.
+          sudo tar --zstd -xvf "${KATA_SRC_DIR}/build/kata-static-agent.tar.zst" -C "${ROOTFS_IMAGE_DIR}"
+
+          # ls exits non-zero (failing the step) if the agent did not land.
+          sudo ls -l "${ROOTFS_IMAGE_DIR}/usr/bin/kata-agent"
+
+      - name: Rebuild image with the new agent
+        run: |
+          # The guest boots the packed image, not the rootfs dir - the new
+          # agent only takes effect once baked in. script -fec keeps a TTY so
+          # the docker build output streams instead of buffering.
+          cd "${IMAGE_BUILDER_DIR}"
+          script -fec "sudo -E AGENT_INIT=no USE_DOCKER=true ./image_builder.sh \"${ROOTFS_IMAGE_DIR}\""
+
+      - name: Test GPU passthrough via CDI
+        run: |
+          set -euo pipefail
+
+          # vfio1, not vfio0: the runner node has two GPUs and vfio0 belongs
+          # to the NVRC CI - separate devices keep concurrent runs of the two
+          # pipelines from contending for the same GPU.
+          #
+          # nvidia-smi succeeding inside the container is the end-to-end
+          # proof: the agent (built with the PR's CDI crate) resolved the
+          # VFIO device and wired it into the container.
+          # set +e so the assertions below run on the captured output even
+          # when nerdctl fails.
+          set +e
+          output=$(sudo nerdctl run --runtime io.containerd.kata.v2 --device /dev/vfio/devices/vfio1 --rm ubuntu -- sh -c "nvidia-smi; dmesg" 2>&1)
+          exit_code=$?
+          set -e
+
+          echo "=== nerdctl output ==="
+          echo "$output"
+          echo "=== nerdctl exit code: $exit_code ==="
+
+          # TODO: non-fatal until kata-containers stops returning 255 on VM teardown.
+          if [ "$exit_code" -ne 0 ]; then
+            echo "WARNING: nerdctl exited with $exit_code (expected 0); ignoring pending kata-containers fix"
+          fi
+
+          if grep -qE 'ttrpc: closed|level=fatal' <<<"$output"; then
+            echo "WARNING: kata-runtime fatal error in nerdctl output (ignoring pending kata-containers fix):"
+            grep -E 'ttrpc: closed|level=fatal' <<<"$output"
+          fi
+
+          if ! grep -q "NVIDIA-SMI" <<<"$output"; then
+            echo "ERROR: nvidia-smi did not produce expected NVIDIA-SMI banner"
+            exit 1
+          fi
+
+          echo "SUCCESS: GPU visible in the container - agent with the PR's CDI crate handled the device"
+
+      - name: Dump kata/guest diagnostics on failure
+        # Runs whenever an earlier step (typically a test) failed. The tests
+        # only capture nerdctl's stderr, so a "create container timeout" leaves
+        # no guest-side trace; gather the kata runtime log (which carries the
+        # guest console when enable_debug is set), the VFIO/GPU host state and
+        # the relevant configuration.toml lines so failures are debuggable.
+        if: failure()
+        run: |
+          set -uo pipefail
+
+          echo "::group::configuration.toml (relevant lines)"
+          sudo grep -nE '^[[:space:]]*(enable_debug|debug_console_enabled|create_container_timeout|dial_timeout|kernel|initrd|image|path|kernel_params|sandbox_cgroup_only)\b' \
+            /etc/kata-containers/configuration.toml || true
+          echo "::endgroup::"
+
+          echo "::group::kata shim version"
+          sudo /opt/kata/bin/containerd-shim-kata-v2 --version || true
+          echo "::endgroup::"
+
+          echo "::group::VFIO / NVIDIA GPU host state"
+          # vfio1 is what the tests pass via --device; confirm it exists and
+          # that the GPU is actually bound to vfio-pci (not the host driver).
+          ls -l /dev/vfio /dev/vfio/devices 2>/dev/null || true
+          lspci -nnk -d 10de: 2>/dev/null || true
+          echo "::endgroup::"
+
+          echo "::group::host dmesg (vfio/iommu/nvidia)"
+          sudo dmesg --ctime 2>/dev/null | grep -iE 'vfio|iommu|nvidia|10de:' | tail -n 100 || true
+          echo "::endgroup::"
+
+          # The kata journal is enormous with agent.log=debug, so pull it once
+          # and surface only the decisive slices below. Empty output means
+          # enable_debug is off in the config above.
+          journal=$(mktemp)
+          # ${journal} is a user-owned mktemp file; sudo is only needed to read
+          # the journal, not for the redirect, so SC2024 does not apply here.
+          # shellcheck disable=SC2024
+          sudo journalctl -t kata --since "20 min ago" -o cat > "${journal}" 2>/dev/null || true
+
+          echo "::group::kata shim errors & warnings (qemu / vfio / agent)"
+          grep -E 'level=(error|warning|fatal)' "${journal}" | tail -n 100 || true
+          echo "::endgroup::"
+
+          echo "::group::guest console - markers (cdi / nvidia / agent / panic)"
+          # Strip the shim wrapper down to the raw guest console text, then keep
+          # only the lines that decide CDI-vs-environment.
+          sed -n 's/.*vmconsole="\(.*\)"$/\1/p' "${journal}" \
+            | grep -iE 'cdi|nvidia|kata-agent| agent |vsock|panic|call trace|BUG:|oops|segfault|out of memory|reached target|started |failed|cannot|/sbin/init|switch_root' \
+            | tail -n 150 || true
+          echo "::endgroup::"
+
+          echo "::group::guest console - tail (raw: shows where boot stopped)"
+          # Unfiltered so an early stall mid-initcall is still visible.
+          sed -n 's/.*vmconsole="\(.*\)"$/\1/p' "${journal}" | tail -n 200 || true
+          echo "::endgroup::"
+
+          rm -f "${journal}"
