@@ -73,17 +73,27 @@ jobs:
           fetch-depth: 0 # This is needed in order to keep the commit ids history
           persist-credentials: false
 
-      - name: Point the kata-agent at the PR's CDI code
+      - name: Own the kata tree
         run: |
           set -euo pipefail
 
-          # Belt-and-braces against "dubious ownership": update-kata.yaml
-          # normalizes the tree's ownership, but containerized builds can
-          # leave root-owned files behind between provisioning runs, and git
-          # then refuses the repo. The guard keeps the global config from
-          # accumulating duplicate entries on this persistent runner.
+          # Unconditional: containerized builds and root processes leave
+          # root-owned files behind between update-kata provisioning runs,
+          # and permission probes are unreliable (a dir can be writable but
+          # not searchable, which a -w guard misses - it broke this job).
+          # chown is metadata-only and idempotent, so it costs seconds
+          # against a multi-minute agent build.
+          sudo chown -R "$(id -u)":"$(id -g)" "${KATA_SRC_DIR}"
+
+          # Belt-and-braces against "dubious ownership" if anything above is
+          # ever skipped. The guard keeps the global config from accumulating
+          # duplicate entries on this persistent runner.
           git config --global --get-all safe.directory 2>/dev/null | grep -qx "${KATA_SRC_DIR}" \
             || git config --global --add safe.directory "${KATA_SRC_DIR}"
+
+      - name: Point the kata-agent at the PR's CDI code
+        run: |
+          set -euo pipefail
 
           # The runner is persistent, so a patch appended by a previous run is
           # still in the manifest - appending again would stack duplicate
@@ -119,15 +129,6 @@ jobs:
       - name: Build kata-agent with the patched CDI crate
         run: |
           set -euo pipefail
-
-          # Self-heal ownership: containerized builds leave root-owned files
-          # behind between update-kata provisioning runs, and a root-owned
-          # build/ blocks cd, rm and make for the runner user. Guarded so it
-          # costs nothing when ownership is already correct; update-kata
-          # remains the canonical fix at provisioning time.
-          if [[ ! -w "${KATA_SRC_DIR}/build" ]]; then
-            sudo chown -R "$(id -u)":"$(id -g)" "${KATA_SRC_DIR}"
-          fi
 
           cd "${KATA_SRC_DIR}/build"
 
