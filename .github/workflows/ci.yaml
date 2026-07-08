@@ -77,6 +77,14 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Belt-and-braces against "dubious ownership": update-kata.yaml
+          # normalizes the tree's ownership, but containerized builds can
+          # leave root-owned files behind between provisioning runs, and git
+          # then refuses the repo. The guard keeps the global config from
+          # accumulating duplicate entries on this persistent runner.
+          git config --global --get-all safe.directory 2>/dev/null | grep -qx "${KATA_SRC_DIR}" \
+            || git config --global --add safe.directory "${KATA_SRC_DIR}"
+
           # The runner is persistent, so a patch appended by a previous run is
           # still in the manifest - appending again would stack duplicate
           # entries and break the build. Reset to the pristine tag first.

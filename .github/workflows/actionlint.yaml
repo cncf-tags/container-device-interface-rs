@@ -47,7 +47,9 @@ jobs:
           persist-credentials: false
 
       - name: Install actionlint gh extension
-        run: gh extension install https://github.com/cschleiden/gh-actionlint
+        # Pinned: an unpinned install executes whatever is on the extension's
+        # default branch at runtime.
+        run: gh extension install https://github.com/cschleiden/gh-actionlint --pin 2282dce14a830e8ec7d23f5e0aba9b495b77f771 # v1.0.3
 
       - name: Run actionlint
         run: gh actionlint

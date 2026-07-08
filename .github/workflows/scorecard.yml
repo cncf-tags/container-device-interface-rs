@@ -21,9 +21,14 @@ jobs:
   analysis:
     name: Scorecard analysis
     runs-on: ubuntu-24.04
-    # `publish_results: true` only works when run from the default branch. conditional can be removed if disabled.
-    if: github.event.repository.default_branch == github.ref_name || github.event_name == 'pull_request'
+    # `publish_results: true` only works when run from the default branch.
+    # branch_protection_rule is exempted from the ref check because
+    # github.ref_name may be unset for that event, which would silently skip
+    # the very check Scorecard needs it for.
+    if: github.event_name == 'branch_protection_rule' || github.event.repository.default_branch == github.ref_name
     permissions:
+      # Needed to check out the repository.
+      contents: read
       # Needed to upload the results to code-scanning dashboard.
       security-events: write
       # Needed to publish results and get a badge (see publish_results below).

@@ -9,7 +9,14 @@ updates:
     directory: "/" # Location of package manifests
     schedule:
       interval: "daily"
+    # Wait before adopting fresh releases: a compromised package is usually
+    # yanked within days, and the cooldown keeps it from being pulled in
+    # automatically the moment it ships.
+    cooldown:
+      default-days: 7
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
