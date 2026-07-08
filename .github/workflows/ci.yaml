@@ -73,29 +73,6 @@ jobs:
           fetch-depth: 0 # This is needed in order to keep the commit ids history
           persist-credentials: false
 
-      - name: Own the kata tree
-        run: |
-          set -euo pipefail
-
-          # Unconditional: containerized builds and root processes leave
-          # root-owned files behind between update-kata provisioning runs,
-          # and permission probes are unreliable (a dir can be writable but
-          # not searchable, which a -w guard misses - it broke this job).
-          # Both are metadata-only and idempotent, seconds against a
-          # multi-minute agent build.
-          sudo chown -R "$(id -u)":"$(id -g)" "${KATA_SRC_DIR}"
-          # chown fixes the owner but not the mode: a dir without its
-          # owner-execute bit (as tar/container extraction can create) stays
-          # un-enterable even for the owner. u+rwX adds search only to
-          # directories, never execute to plain files.
-          sudo chmod -R u+rwX "${KATA_SRC_DIR}"
-
-          # Belt-and-braces against "dubious ownership" if anything above is
-          # ever skipped. The guard keeps the global config from accumulating
-          # duplicate entries on this persistent runner.
-          git config --global --get-all safe.directory 2>/dev/null | grep -qx "${KATA_SRC_DIR}" \
-            || git config --global --add safe.directory "${KATA_SRC_DIR}"
-
       - name: Point the kata-agent at the PR's CDI code
         run: |
           set -euo pipefail
@@ -135,12 +112,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          cd "${KATA_SRC_DIR}/build"
+          # make runs from the kata tree root; artifacts land under build/.
+          cd "${KATA_SRC_DIR}"
 
           # Leftover artifacts from a previous run would let make skip the
           # rebuild and ship yesterday's agent - the PR code would never be
           # tested while the CI still reports green.
-          rm -rf agent kata-static-agent.tar.zst
+          rm -rf build/agent build/kata-static-agent.tar.zst
 
           # USE_CACHE=no for the same reason: with the cache on, the build
           # downloads a prebuilt agent artifact from GitHub instead of
