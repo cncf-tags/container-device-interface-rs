@@ -35,15 +35,10 @@ on:
       # release. Release-only steps (kata-static install, tag resolution)
       # are skipped; the installed runtime stays as-is.
       kata-ref:
-        description: "Arbitrary kata ref (branch/SHA). Overrides kata-tag; skips the kata-static release install."
+        description: "Arbitrary kata ref (branch/SHA) from the canonical kata repo. Overrides kata-tag; skips the kata-static release install."
         required: false
         type: string
         default: ""
-      kata-repo:
-        description: "Repo for kata-ref (owner/name)"
-        required: false
-        type: string
-        default: "kata-containers/kata-containers"
 
 permissions:
   contents: read
@@ -141,7 +136,6 @@ jobs:
         env:
           TAG: ${{ steps.tag.outputs.tag }}
           REF: ${{ inputs.kata-ref }}
-          REF_REPO: ${{ inputs.kata-repo }}
         run: |
           set -euo pipefail
 
@@ -175,7 +169,8 @@ jobs:
           git reset --hard
           git clean -ffdx
           if [[ -n "${REF}" ]]; then
-            git fetch -- "https://github.com/${REF_REPO}.git" "${REF}"
+            # Canonical repo only - fork code never reaches the runner.
+            git fetch -- "https://github.com/${KATA_REPO}.git" "${REF}"
             git checkout --detach FETCH_HEAD
           else
             git fetch --tags --force --prune origin
