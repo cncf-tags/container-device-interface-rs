@@ -1,0 +1,118 @@
+name: kata-checkout slash command
+
+# "/kata-checkout <ref> [owner/repo]" on a PR switches the runner's kata
+# source tree to an arbitrary ref. WHY: ecosystem-coupled changes (e.g. an
+# oci-spec bump) can only go green against a kata WIP branch that carries
+# the matching change - this lets the pair be E2E-validated on the metal
+# before either repo merges. Runs the default-branch definition; no PR code
+# executes here.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+# The kata tree is shared runner state; queued switches must not interleave.
+concurrency:
+  group: kata-checkout-tree
+  cancel-in-progress: false
+
+env:
+  KATA_SRC_DIR: /home/container-device-interface-rs/actions-runner/_work/kata-containers
+
+jobs:
+  checkout:
+    # Write-access users only (the same set that can grant ok-to-test) -
+    # this puts arbitrary kata code on the self-hosted runner. Association
+    # is set by GitHub, not spoofable from the comment. Trailing space:
+    # the command requires an argument and must not prefix-match others.
+    if: >-
+      ${{ github.event.issue.pull_request &&
+          startsWith(github.event.comment.body, '/kata-checkout ') &&
+          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) }}
+    runs-on: g5g.metal
+    permissions:
+      contents: read
+      pull-requests: write # acknowledge with the resolved SHA
+      issues: write # comments on PRs ride the Issues API
+
+    steps:
+      - name: Parse command
+        id: cmd
+        env:
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+
+          # Strict charsets keep the comment body out of shell/git option
+          # positions.
+          read -r _ ref repo <<<"${BODY}" || true
+          repo="${repo:-kata-containers/kata-containers}"
+          # "-" is git's previous-checkout notation; anything else must
+          # start alphanumeric so a ref can never look like an option.
+          if [[ "${ref:-}" != "-" ]] && [[ ! "${ref:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]; then
+            echo "ERROR: usage: /kata-checkout <ref> [owner/repo]" >&2
+            exit 1
+          fi
+          if [[ ! "${repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+            echo "ERROR: invalid repo '${repo}'" >&2
+            exit 1
+          fi
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+          echo "repo=${repo}" >> "$GITHUB_OUTPUT"
+
+      - name: Switch the kata tree
+        env:
+          REF: ${{ steps.cmd.outputs.ref }}
+          REPO: ${{ steps.cmd.outputs.repo }}
+        run: |
+          set -euo pipefail
+
+          cd "${KATA_SRC_DIR}"
+
+          # Recorded so the ack comment always says how to get back.
+          prev=$(git describe --tags --always)
+          echo "prev=${prev}" >> "$GITHUB_OUTPUT"
+
+          git reset --hard
+          # No git clean: build/ (rootfs, image) is untracked and survives
+          # the switch - a full clean would force a 30+ minute reprovision
+          # (update-kata) for changes that only affect the agent.
+          if [[ "${REF}" == "-" ]]; then
+            # git's previous-checkout notation; the reflog persists on the
+            # runner, so this undoes the last switch.
+            git checkout --detach -
+          elif git fetch -- "https://github.com/${REPO}.git" "${REF}" 2>/dev/null; then
+            git checkout --detach FETCH_HEAD
+          elif git rev-parse --verify --quiet "${REF}^{commit}" >/dev/null; then
+            # Already-local tag or SHA (e.g. the provisioned release tag).
+            git checkout --detach "${REF}"
+          else
+            echo "ERROR: '${REF}' not found in ${REPO} or locally" >&2
+            exit 1
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          git log -1 --oneline
+        id: tree
+
+      - name: Acknowledge on the PR
+        # github-script instead of gh: no dependency on CLI presence on the
+        # self-hosted runner, consistent with the other label/comment flows.
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          REF: ${{ steps.cmd.outputs.ref }}
+          REPO: ${{ steps.cmd.outputs.repo }}
+          SHA: ${{ steps.tree.outputs.sha }}
+          PREV: ${{ steps.tree.outputs.prev }}
+        with:
+          script: |
+            const { REF, REPO, SHA, PREV } = process.env;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `Runner kata tree switched to \`${REPO}#${REF}\` (\`${SHA}\`), previously at \`${PREV}\`. ` +
+                `Re-apply \`ok-to-test\` to run the E2E against it. Restore with \`/kata-checkout -\` or ` +
+                `\`/kata-checkout ${PREV}\`; full reprovision via the update-kata workflow.`,
+            });
