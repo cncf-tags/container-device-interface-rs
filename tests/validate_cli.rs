@@ -186,3 +186,90 @@ fn validate_cli_rejects_cdi_schema_without_defs_json() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn validate_cli_accepts_schema_none() {
+    let output = Command::new(validate_bin())
+        .args(["--schema", "none"])
+        .arg(manifest_path("tests/fixtures/cdi-v1.1-good.yaml"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{:?}", output);
+}
+
+#[test]
+fn validate_cli_reads_document_from_stdin() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = Command::new(validate_bin())
+        .args(["--schema", "builtin", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&std::fs::read(manifest_path("tests/fixtures/cdi-v1.1-good.yaml")).unwrap())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{:?}", output);
+}
+
+#[test]
+fn validate_cli_uses_sibling_defs_json_for_custom_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    std::fs::copy(
+        manifest.join("src/schema/schema.json"),
+        dir.path().join("schema.json"),
+    )
+    .unwrap();
+    std::fs::copy(
+        manifest.join("src/schema/defs.json"),
+        dir.path().join("defs.json"),
+    )
+    .unwrap();
+
+    let output = Command::new(validate_bin())
+        .args(["--schema", dir.path().join("schema.json").to_str().unwrap()])
+        .arg(manifest_path("tests/fixtures/cdi-v1.1-good.yaml"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{:?}", output);
+}
+
+#[test]
+fn validate_cli_rejects_schema_referencing_missing_defs() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("schema.json"),
+        r##"{"type": "object", "properties": {"x": {"$ref": "defs.json#/defs/foo"}}}"##,
+    )
+    .unwrap();
+
+    let output = Command::new(validate_bin())
+        .args(["--schema", dir.path().join("schema.json").to_str().unwrap()])
+        .arg(manifest_path("tests/fixtures/cdi-v1.1-good.yaml"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no sibling defs.json"), "{stderr}");
+}
+
+#[test]
+fn validate_cli_accepts_standalone_custom_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("schema.json"), r#"{"type": "object"}"#).unwrap();
+
+    let output = Command::new(validate_bin())
+        .args(["--schema", dir.path().join("schema.json").to_str().unwrap()])
+        .arg(manifest_path("tests/fixtures/cdi-v1.1-good.yaml"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{:?}", output);
+}

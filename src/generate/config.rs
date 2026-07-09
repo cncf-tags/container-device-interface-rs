@@ -105,3 +105,37 @@ impl Generator {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Each init_* must create the layer once and leave it alone after -
+    // calling twice exercises both branches.
+    #[test]
+    fn init_helpers_are_idempotent() {
+        let mut g = Generator::spec_gen(None);
+        g.init_config();
+        assert!(g.config.is_some());
+
+        for _ in 0..2 {
+            g.init_config_process();
+            g.init_config_linux();
+            g.init_config_linux_resources();
+            g.init_config_linux_resources_devices();
+            g.init_config_linux_net_devices();
+            g.init_config_hooks();
+            g.init_config_mounts();
+            g.init_config_linux_intel_rdt();
+        }
+
+        let spec = g.config.as_ref().unwrap();
+        assert!(spec.process().is_some());
+        assert!(spec.hooks().is_some());
+        assert!(spec.mounts().is_some());
+        let linux = spec.linux().as_ref().unwrap();
+        assert!(linux.resources().as_ref().unwrap().devices().is_some());
+        assert!(linux.net_devices().is_some());
+        assert!(linux.intel_rdt().is_some());
+    }
+}

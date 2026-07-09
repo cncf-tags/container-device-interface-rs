@@ -615,4 +615,265 @@ mod tests {
         assert_eq!(Some(1234), dev.uid());
         assert_eq!(Some(5678), dev.gid());
     }
+
+    fn named_device_node(path: &str, perms: Option<&str>) -> CDIDeviceNode {
+        CDIDeviceNode {
+            path: path.to_string(),
+            r#type: Some("c".to_string()),
+            major: Some(1),
+            minor: Some(3),
+            permissions: perms.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn apply_inherits_process_uid_gid_and_maps_permissions() {
+        let mut edits = ContainerEdits::new();
+        edits.container_edits.env = Some(vec![]); // empty env list: no-op branch
+        edits.container_edits.device_nodes = Some(vec![
+            named_device_node("/dev/a", None),         // -> rwm
+            named_device_node("/dev/b", Some("none")), // -> ""
+            named_device_node("/dev/c", Some("rw")),   // -> rw
+        ]);
+
+        let mut spec = oci::Spec::default();
+        if let Some(process) = spec.process_mut() {
+            process.user_mut().set_uid(1000);
+            process.user_mut().set_gid(2000);
+        }
+        edits.apply(&mut spec).unwrap();
+
+        let linux = spec.linux().as_ref().unwrap();
+        let dev = &linux.devices().as_ref().unwrap()[0];
+        assert_eq!((Some(1000), Some(2000)), (dev.uid(), dev.gid()));
+
+        let access: Vec<_> = linux
+            .resources()
+            .as_ref()
+            .unwrap()
+            .devices()
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|d| d.access().clone().unwrap_or_default())
+            .collect();
+        assert_eq!(access, vec!["rwm", "", "rw"]);
+    }
+
+    #[test]
+    fn apply_places_every_hook_kind() {
+        let kinds = [
+            "prestart",
+            "createRuntime",
+            "createContainer",
+            "startContainer",
+            "poststart",
+            "poststop",
+        ];
+        let mut edits = ContainerEdits::new();
+        edits.container_edits.hooks = Some(
+            kinds
+                .iter()
+                .map(|k| CDIHook {
+                    hook_name: k.to_string(),
+                    path: "/bin/true".to_string(),
+                    ..Default::default()
+                })
+                .collect(),
+        );
+
+        let mut spec = oci::Spec::default();
+        edits.apply(&mut spec).unwrap();
+
+        let hooks = spec.hooks().as_ref().unwrap();
+        assert_eq!(hooks.prestart().as_ref().unwrap().len(), 1);
+        assert_eq!(hooks.create_runtime().as_ref().unwrap().len(), 1);
+        assert_eq!(hooks.create_container().as_ref().unwrap().len(), 1);
+        assert_eq!(hooks.start_container().as_ref().unwrap().len(), 1);
+        assert_eq!(hooks.poststart().as_ref().unwrap().len(), 1);
+        assert_eq!(hooks.poststop().as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn apply_rejects_unknown_hook_names() {
+        let mut edits = ContainerEdits::new();
+        edits.container_edits.hooks = Some(vec![CDIHook {
+            hook_name: "bogus".to_string(),
+            path: "/bin/true".to_string(),
+            ..Default::default()
+        }]);
+        let err = edits.apply(&mut oci::Spec::default()).unwrap_err();
+        assert!(err.to_string().contains("no such hook"));
+    }
+
+    #[test]
+    fn append_merges_intel_rdt_from_other() {
+        let mut base = ContainerEdits::new();
+        base.container_edits.env = Some(vec!["A=1".to_string()]);
+        let mut other = ContainerEdits::new();
+        other.container_edits.intel_rdt = Some(CDIIntelRdt {
+            clos_id: Some("class".to_string()),
+            ..Default::default()
+        });
+        other.container_edits.env = Some(vec!["B=2".to_string()]);
+
+        base.append(other).unwrap();
+
+        assert_eq!(
+            base.container_edits.intel_rdt.as_ref().unwrap().clos_id,
+            Some("class".to_string())
+        );
+        assert_eq!(
+            base.container_edits.env,
+            Some(vec!["A=1".to_string(), "B=2".to_string()])
+        );
+    }
+
+    #[test]
+    fn validate_rejects_each_invalid_component() {
+        let case = |mutate: &dyn Fn(&mut CDIContainerEdits), needle: &str| {
+            let mut edits = ContainerEdits::new();
+            mutate(&mut edits.container_edits);
+            let err = edits.validate().unwrap_err();
+            assert!(
+                format!("{err:?}").contains(needle),
+                "expected {needle:?} in {err:?}"
+            );
+        };
+
+        case(
+            &|e| e.env = Some(vec!["NOEQUALS".into()]),
+            "invalid environment variable",
+        );
+        case(
+            &|e| {
+                e.device_nodes = Some(vec![CDIDeviceNode {
+                    path: String::new(),
+                    ..Default::default()
+                }])
+            },
+            "invalid (empty) device path",
+        );
+        case(
+            &|e| {
+                e.device_nodes = Some(vec![CDIDeviceNode {
+                    path: "/dev/x".into(),
+                    permissions: Some("rwx".into()),
+                    ..Default::default()
+                }])
+            },
+            "invalid permissions",
+        );
+        case(
+            &|e| {
+                e.hooks = Some(vec![CDIHook {
+                    hook_name: "bogus".into(),
+                    path: "/bin/true".into(),
+                    ..Default::default()
+                }])
+            },
+            "invalid hook name",
+        );
+        case(
+            &|e| {
+                e.hooks = Some(vec![CDIHook {
+                    hook_name: "prestart".into(),
+                    path: String::new(),
+                    ..Default::default()
+                }])
+            },
+            "empty path",
+        );
+        case(
+            &|e| {
+                e.hooks = Some(vec![CDIHook {
+                    hook_name: "prestart".into(),
+                    path: "/bin/true".into(),
+                    env: Some(vec!["BAD".into()]),
+                    ..Default::default()
+                }])
+            },
+            "invalid env",
+        );
+        case(
+            &|e| {
+                e.mounts = Some(vec![CDIMount {
+                    host_path: String::new(),
+                    container_path: "/c".into(),
+                    ..Default::default()
+                }])
+            },
+            "empty host path",
+        );
+        case(
+            &|e| {
+                e.mounts = Some(vec![CDIMount {
+                    host_path: "/h".into(),
+                    container_path: String::new(),
+                    ..Default::default()
+                }])
+            },
+            "empty container path",
+        );
+        case(
+            &|e| {
+                e.intel_rdt = Some(CDIIntelRdt {
+                    clos_id: Some("a/b".into()),
+                    ..Default::default()
+                })
+            },
+            "invalid clos id",
+        );
+    }
+
+    #[test]
+    fn validate_rejects_bad_net_devices() {
+        let netdev = |host: &str, name: &str| crate::specs::config::LinuxNetDevice {
+            host_interface_name: host.to_string(),
+            name: name.to_string(),
+        };
+        let case = |devices: Vec<crate::specs::config::LinuxNetDevice>, needle: &str| {
+            let mut edits = ContainerEdits::new();
+            edits.container_edits.net_devices = Some(devices);
+            let err = edits.validate().unwrap_err();
+            assert!(format!("{err:?}").contains(needle), "missing {needle:?}");
+        };
+
+        case(vec![netdev("", "eth0")], "empty HostInterfaceName");
+        case(vec![netdev("eth0", "")], "empty Name");
+        case(
+            vec![netdev("eth0", "a"), netdev("eth0", "b")],
+            "duplicate HostInterfaceName",
+        );
+        case(
+            vec![netdev("eth0", "a"), netdev("eth1", "a")],
+            "duplicate Name",
+        );
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore = "miri's stat shim does not populate rdev for /dev/null")]
+    fn fill_missing_info_rejects_host_type_mismatch() {
+        let mut dn = DeviceNode {
+            node: CDIDeviceNode {
+                path: "/dev/whatever".to_string(),
+                host_path: Some("/dev/null".to_string()),
+                r#type: Some("b".to_string()),
+                ..Default::default()
+            },
+        };
+        let err = dn.fill_missing_info().unwrap_err();
+        assert!(err.to_string().contains("host type mismatch"));
+    }
+
+    #[test]
+    fn fill_missing_info_returns_early_when_complete() {
+        let mut dn = DeviceNode {
+            node: named_device_node("/proc/does-not-matter", None),
+        };
+        // type + major present: no filesystem access happens at all
+        dn.fill_missing_info().unwrap();
+        assert_eq!(dn.node.major, Some(1));
+    }
 }

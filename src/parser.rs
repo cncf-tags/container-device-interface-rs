@@ -281,4 +281,37 @@ mod tests {
         assert!(parser::validate_device_name("_gpu").is_err());
         assert!(parser::validate_device_name("gpu_").is_err());
     }
+
+    #[test]
+    fn qualified_name_detection_both_ways() {
+        assert!(parser::is_qualified_name("vendor.com/class=dev"));
+        assert!(!parser::is_qualified_name("/dev/null"));
+    }
+
+    #[test]
+    fn parse_qualified_name_rejects_malformed_input() {
+        for (input, needle) in [
+            ("", "missing vendor"),
+            ("/dev/null", "missing vendor"),
+            ("class=dev", "missing vendor"),
+            ("vendor.com/class", "missing vendor"),
+            ("vendor.com/class=", "missing vendor"),
+            ("_vendor/class=dev", "invalid vendor"),
+            ("vendor.com/cl*ss=dev", "invalid class"),
+            ("vendor.com/class=dev name", "invalid device"),
+        ] {
+            let err = parser::parse_qualified_name(input).unwrap_err();
+            assert!(
+                err.to_string().contains(needle),
+                "{input:?}: expected {needle:?} in {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_qualifier_splits_or_returns_verbatim() {
+        assert_eq!(parser::parse_qualifier("vendor/class"), ("vendor", "class"));
+        assert_eq!(parser::parse_qualifier("noslash"), ("", "noslash"));
+        assert_eq!(parser::parse_qualifier("vendor/"), ("", "vendor/"));
+    }
 }

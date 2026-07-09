@@ -403,4 +403,129 @@ mod tests {
             "1.1.0"
         );
     }
+
+    #[test]
+    fn v110_specs_reject_legacy_intel_rdt_fields() {
+        for (cmt, mbm, needle) in [
+            (Some(true), None, "enableCMT"),
+            (None, Some(true), "enableMBM"),
+        ] {
+            let spec = CDISpec {
+                version: V110.to_string(),
+                kind: "vendor.com/device".to_string(),
+                container_edits: Some(ContainerEdits {
+                    intel_rdt: Some(IntelRdt {
+                        enable_cmt: cmt,
+                        enable_mbm: mbm,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let err = validate_declared_version_fields(&spec).unwrap_err();
+            assert!(err.to_string().contains(needle), "{err}");
+        }
+    }
+
+    #[test]
+    fn pre_v110_specs_reject_net_devices() {
+        let spec = CDISpec {
+            version: V070.to_string(),
+            kind: "vendor.com/device".to_string(),
+            container_edits: Some(ContainerEdits {
+                net_devices: Some(vec![LinuxNetDevice {
+                    host_interface_name: "eth0".to_string(),
+                    name: "c_eth0".to_string(),
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let err = validate_declared_version_fields(&spec).unwrap_err();
+        assert!(err.to_string().contains("netDevices requires"), "{err}");
+    }
+
+    #[test]
+    fn device_level_edits_drive_required_versions() {
+        let with_device_edits = |edits: ContainerEdits| CDISpec {
+            version: VCURRENT.to_string(),
+            kind: "vendor.com/device".to_string(),
+            devices: vec![Device {
+                name: "d0".to_string(),
+                container_edits: edits,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        // device-level intelRdt (clos only) -> 0.7.0
+        let spec = with_device_edits(ContainerEdits {
+            intel_rdt: Some(IntelRdt {
+                clos_id: Some("c".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert_eq!(
+            minimum_required_version(&spec).unwrap().to_string(),
+            "0.7.0"
+        );
+
+        // device-level netDevices -> 1.1.0
+        let spec = with_device_edits(ContainerEdits {
+            net_devices: Some(vec![LinuxNetDevice {
+                host_interface_name: "eth0".to_string(),
+                name: "c".to_string(),
+            }]),
+            ..Default::default()
+        });
+        assert_eq!(
+            minimum_required_version(&spec).unwrap().to_string(),
+            "1.1.0"
+        );
+
+        // device-level additionalGIDs -> 0.7.0
+        let spec = with_device_edits(ContainerEdits {
+            additional_gids: Some(vec![5]),
+            ..Default::default()
+        });
+        assert_eq!(
+            minimum_required_version(&spec).unwrap().to_string(),
+            "0.7.0"
+        );
+    }
+
+    #[test]
+    fn annotations_and_dotted_class_require_v060() {
+        let mut spec = CDISpec {
+            version: VCURRENT.to_string(),
+            kind: "vendor.com/device".to_string(),
+            ..Default::default()
+        };
+        spec.annotations.insert("k".to_string(), "v".to_string());
+        assert_eq!(
+            minimum_required_version(&spec).unwrap().to_string(),
+            "0.6.0"
+        );
+
+        let mut spec = CDISpec {
+            version: VCURRENT.to_string(),
+            kind: "vendor.com/class.with.dots".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            minimum_required_version(&spec).unwrap().to_string(),
+            "0.6.0"
+        );
+        spec.devices = vec![Device {
+            name: "d0".to_string(),
+            annotations: [("a".to_string(), "b".to_string())].into(),
+            ..Default::default()
+        }];
+        assert_eq!(
+            minimum_required_version(&spec).unwrap().to_string(),
+            "0.6.0"
+        );
+    }
 }

@@ -82,8 +82,7 @@ jobs:
       # threshold fails. `report` rescores the profdata recorded by the
       # generate step; sudo because that data is root-owned. The per-file
       # bound stops an aggregate score from masking under-tested modules.
-      # api.rs is exempt: its device-listing printer needs a populated
-      # /etc/cdi, which CI runners do not have. Ratchet both bounds up as
-      # coverage improves (baseline ~90% total, worst file ~72%).
-      - name: Enforce minimum 85% total and 70% per-file line coverage
-        run: sudo -E env "PATH=$PATH" cargo llvm-cov report --fail-under-lines 85 --fail-under-file-lines 70 --ignore-filename-regex 'bin/cdi_ops/api\.rs$'
+      # Ratchet both bounds up as coverage improves (baseline ~96% total,
+      # worst file ~86%).
+      - name: Enforce minimum 92% total and 80% per-file line coverage
+        run: sudo -E env "PATH=$PATH" cargo llvm-cov report --fail-under-lines 92 --fail-under-file-lines 80
