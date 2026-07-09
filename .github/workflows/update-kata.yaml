@@ -30,6 +30,20 @@ on:
         required: false
         type: string
         default: ""
+      # For dependency-transition windows (e.g. the oci-spec bump): rebuild
+      # rootfs/kernel from a kata WIP ref without reverting the tree to a
+      # release. Release-only steps (kata-static install, tag resolution)
+      # are skipped; the installed runtime stays as-is.
+      kata-ref:
+        description: "Arbitrary kata ref (branch/SHA). Overrides kata-tag; skips the kata-static release install."
+        required: false
+        type: string
+        default: ""
+      kata-repo:
+        description: "Repo for kata-ref (owner/name)"
+        required: false
+        type: string
+        default: "kata-containers/kata-containers"
 
 permissions:
   contents: read
@@ -91,6 +105,7 @@ jobs:
 
       - name: Resolve release tag
         id: tag
+        if: ${{ inputs.kata-ref == '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED_TAG: ${{ inputs.kata-tag }}
@@ -122,9 +137,11 @@ jobs:
           echo "Resolved '${REQUESTED_TAG:-latest}' -> ${tag}"
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
-      - name: Sync kata-containers source tree to ${{ steps.tag.outputs.tag }}
+      - name: Sync kata-containers source tree to ${{ inputs.kata-ref || steps.tag.outputs.tag }}
         env:
           TAG: ${{ steps.tag.outputs.tag }}
+          REF: ${{ inputs.kata-ref }}
+          REF_REPO: ${{ inputs.kata-repo }}
         run: |
           set -euo pipefail
 
@@ -157,8 +174,13 @@ jobs:
           # by `make rootfs-image-nvidia-gpu-tarball` below.
           git reset --hard
           git clean -ffdx
-          git fetch --tags --force --prune origin
-          git checkout --detach "refs/tags/${TAG}"
+          if [[ -n "${REF}" ]]; then
+            git fetch -- "https://github.com/${REF_REPO}.git" "${REF}"
+            git checkout --detach FETCH_HEAD
+          else
+            git fetch --tags --force --prune origin
+            git checkout --detach "refs/tags/${TAG}"
+          fi
 
           echo "kata-containers @ $(git rev-parse HEAD) ($(git describe --tags --always))"
 
@@ -214,6 +236,9 @@ jobs:
 
       - name: Download kata-static asset
         id: download
+        # Release-only: an arbitrary ref has no published kata-static asset;
+        # the installed runtime stays at its current release.
+        if: ${{ inputs.kata-ref == '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
@@ -237,6 +262,7 @@ jobs:
           echo "asset=${workdir}/${asset}" >> "${GITHUB_OUTPUT}"
 
       - name: Install kata-static to /opt/kata
+        if: ${{ inputs.kata-ref == '' }}
         env:
           TAG: ${{ steps.tag.outputs.tag }}
           ASSET: ${{ steps.download.outputs.asset }}
@@ -310,7 +336,7 @@ jobs:
 
       - name: Summary
         env:
-          TAG: ${{ steps.tag.outputs.tag }}
+          TAG: ${{ inputs.kata-ref || steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
 
