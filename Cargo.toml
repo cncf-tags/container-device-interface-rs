@@ -41,7 +41,7 @@ regex = "1.5.4"
 const_format = "0.2.32"
 
 [dev-dependencies]
-nix = "0.24.2"
+nix = "0.31.3"
 tempfile = "3.1.0"
 pretty_assertions = "1.0.0"
 
