@@ -298,6 +298,7 @@ impl Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spec_dirs::with_spec_dirs;
     use crate::{
         spec::new_spec,
         specs::config::{
@@ -306,7 +307,124 @@ mod tests {
         },
     };
     use oci_spec::runtime::Spec as OCISpec;
-    use std::{collections::HashMap, path::PathBuf};
+    use std::{collections::HashMap, fs, path::PathBuf};
+
+    fn spec_yaml(kind: &str, env: &str) -> String {
+        format!(
+            r#"cdiVersion: "0.6.0"
+kind: "{kind}"
+devices:
+  - name: "gpu0"
+    containerEdits:
+      env:
+        - "{env}"
+"#
+        )
+    }
+
+    fn dir_cache(dirs: &[&str]) -> Cache {
+        let mut cache = Cache::default();
+        with_spec_dirs(dirs)(&mut cache);
+        cache
+    }
+
+    #[test]
+    fn refresh_scans_dirs_and_answers_queries() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("vendor.yaml"),
+            spec_yaml("vendor.com/device", "VENDOR=1"),
+        )
+        .unwrap();
+        let mut cache = dir_cache(&[dir.path().to_str().unwrap()]);
+
+        cache.refresh().unwrap();
+
+        assert_eq!(cache.list_devices(), vec!["vendor.com/device=gpu0"]);
+        assert_eq!(cache.list_vendors(), vec!["vendor.com"]);
+        assert_eq!(cache.get_vendor_specs("vendor.com").len(), 1);
+        assert!(cache.get_vendor_specs("other.com").is_empty());
+        assert!(cache.get_device("vendor.com/device=gpu0").is_some());
+        assert!(cache.get_device("vendor.com/device=missing").is_none());
+    }
+
+    #[test]
+    fn auto_refresh_picks_up_new_specs_without_manual_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cache = dir_cache(&[dir.path().to_str().unwrap()]);
+        with_auto_refresh(true)(&mut cache);
+        assert!(cache.list_devices().is_empty());
+
+        fs::write(
+            dir.path().join("vendor.yaml"),
+            spec_yaml("vendor.com/device", "VENDOR=1"),
+        )
+        .unwrap();
+
+        // No explicit refresh(): the query must trigger it.
+        assert_eq!(cache.list_devices(), vec!["vendor.com/device=gpu0"]);
+    }
+
+    #[test]
+    fn later_dir_wins_on_conflicting_device_names() {
+        let low = tempfile::tempdir().unwrap();
+        let high = tempfile::tempdir().unwrap();
+        fs::write(
+            low.path().join("a.yaml"),
+            spec_yaml("vendor.com/device", "FROM=low"),
+        )
+        .unwrap();
+        fs::write(
+            high.path().join("b.yaml"),
+            spec_yaml("vendor.com/device", "FROM=high"),
+        )
+        .unwrap();
+        let mut cache = dir_cache(&[low.path().to_str().unwrap(), high.path().to_str().unwrap()]);
+
+        cache.refresh().unwrap();
+
+        let dev = cache.get_device("vendor.com/device=gpu0").unwrap();
+        assert_eq!(dev.get_spec().get_priority(), 1);
+    }
+
+    #[test]
+    fn same_priority_conflicts_are_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("a.yaml"),
+            spec_yaml("vendor.com/device", "FROM=a"),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("b.yaml"),
+            spec_yaml("vendor.com/device", "FROM=b"),
+        )
+        .unwrap();
+        let mut cache = dir_cache(&[dir.path().to_str().unwrap()]);
+
+        let err = cache.refresh().unwrap_err();
+
+        assert!(err.to_string().contains("conflicting device"));
+        assert!(!cache.errors.is_empty());
+    }
+
+    #[test]
+    fn inject_devices_requires_an_oci_spec() {
+        let mut cache = Cache::default();
+        let err = cache.inject_devices(None, vec![]).unwrap_err();
+        assert!(err.to_string().contains("OCI Spec is empty"));
+    }
+
+    #[test]
+    fn inject_devices_reports_unresolvable_devices() {
+        let mut cache = Cache::default();
+        let mut oci_spec = OCISpec::default();
+        let err = cache
+            .inject_devices(Some(&mut oci_spec), vec!["vendor.com/device=nope".into()])
+            .unwrap_err();
+        assert!(err.to_string().contains("unresolvable CDI devices"));
+        assert!(err.to_string().contains("vendor.com/device=nope"));
+    }
 
     #[test]
     fn inject_devices_preserves_spec_level_intel_rdt_with_device_edits() {

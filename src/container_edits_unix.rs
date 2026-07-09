@@ -205,6 +205,41 @@ mod tests {
         assert_eq!(dev_node.node.minor, None);
     }
 
+    // No root needed: /dev/null exists everywhere as char 1:3.
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "miri's stat shim does not populate rdev; /dev/null major/minor read as 0"
+    )]
+    fn device_info_from_char_device_without_root() {
+        let (typ, major, minor) = device_info_from_path("/dev/null").unwrap();
+        assert_eq!(typ, "c");
+        assert_eq!((major, minor), (1, 3));
+    }
+
+    // No root needed: mkfifo is an unprivileged syscall.
+    #[test]
+    #[cfg_attr(miri, ignore = "mkfifo is FFI miri cannot emulate")]
+    fn device_info_from_fifo_without_root() {
+        let temp_dir = TempDir::new().unwrap();
+        let fifo = temp_dir.path().join("fifo");
+        let path_c = CString::new(fifo.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(path_c.as_ptr(), 0o600) }, 0);
+
+        let (typ, major, minor) = device_info_from_path(&fifo).unwrap();
+        assert_eq!(typ, "p");
+        assert_eq!((major, minor), (0, 0));
+    }
+
+    #[test]
+    fn device_info_rejects_regular_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("plain");
+        std::fs::File::create(&file).unwrap();
+        let err = device_info_from_path(&file).unwrap_err();
+        assert!(err.to_string().contains("not a device node"));
+    }
+
     #[test]
     fn test_fill_missing_info_regular_file() {
         let temp_dir = TempDir::new().unwrap();
