@@ -1,3 +1,6 @@
+// Spawns the validate binary; miri cannot emulate process creation.
+#![cfg(not(miri))]
+
 use std::{
     path::{Path, PathBuf},
     process::Command,

@@ -498,6 +498,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "miri's stat shim does not populate rdev; /dev/null major/minor read as 0"
+    )]
     fn fill_missing_info_treats_empty_device_type_as_unset() {
         let mut device = DeviceNode {
             node: CDIDeviceNode {
