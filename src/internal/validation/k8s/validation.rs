@@ -63,7 +63,7 @@ pub fn is_qualified_name(value: &str) -> Vec<String> {
                 errs.push(format!("prefix part {}", empty_error()));
             } else {
                 let msgs = is_dns1123_subdomain(prefix);
-                if msgs.is_empty() {
+                if !msgs.is_empty() {
                     errs.extend(prefix_each(&msgs, "prefix part "));
                 }
             }
@@ -211,4 +211,78 @@ fn prefix_each(msgs: &[String], prefix: &str) -> Vec<String> {
 #[allow(dead_code)]
 fn inclusive_range_error(lo: usize, hi: usize) -> String {
     format!("must be between {} and {}, inclusive", lo, hi)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qualified_names_accept_valid_forms() {
+        for name in ["simple", "my.name", "123-abc", "example.com/MyName"] {
+            assert!(is_qualified_name(name).is_empty(), "{name} should be valid");
+        }
+    }
+
+    #[test]
+    fn qualified_names_reject_invalid_name_part() {
+        assert!(!is_qualified_name("").is_empty());
+        assert!(!is_qualified_name("-leading.dash").is_empty());
+        assert!(!is_qualified_name(&"x".repeat(64)).is_empty());
+        assert!(!is_qualified_name("a/b/c").is_empty());
+        assert!(!is_qualified_name("/name").is_empty());
+    }
+
+    // Regression: prefix errors were dropped (inverted is_empty check), so
+    // an invalid DNS-1123 prefix used to validate successfully.
+    #[test]
+    fn qualified_names_reject_invalid_prefix() {
+        let errs = is_qualified_name("Bad_Prefix/name");
+        assert!(
+            errs.iter().any(|e| e.starts_with("prefix part ")),
+            "invalid prefix must produce a prefix error, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn label_values() {
+        assert!(is_valid_label_value("").is_empty());
+        assert!(is_valid_label_value("MyValue").is_empty());
+        assert!(!is_valid_label_value("no spaces").is_empty());
+        assert!(!is_valid_label_value(&"x".repeat(64)).is_empty());
+    }
+
+    #[test]
+    fn dns1123_labels_and_subdomains() {
+        assert!(is_dns1123_label("my-name").is_empty());
+        assert!(!is_dns1123_label("My-Name").is_empty());
+        assert!(!is_dns1123_label(&"x".repeat(64)).is_empty());
+        assert!(is_dns1123_subdomain("example.com").is_empty());
+        assert!(!is_dns1123_subdomain("Example.com").is_empty());
+        assert!(!is_dns1123_subdomain(&"x".repeat(254)).is_empty());
+    }
+
+    #[test]
+    fn dns1035_labels() {
+        assert!(is_dns1035_label("abc-123").is_empty());
+        assert!(!is_dns1035_label("1abc").is_empty());
+        assert!(!is_dns1035_label(&"x".repeat(64)).is_empty());
+    }
+
+    #[test]
+    fn wildcard_subdomains() {
+        assert!(is_wildcard_dns1123_subdomain("*.example.com").is_empty());
+        assert!(!is_wildcard_dns1123_subdomain("example.com").is_empty());
+        assert!(!is_wildcard_dns1123_subdomain(&format!("*.{}", "x".repeat(253))).is_empty());
+    }
+
+    #[test]
+    fn error_message_helpers() {
+        assert!(regex_error("msg", "fmt", &[]).contains("regex used for validation"));
+        assert!(regex_error("msg", "fmt", &["ex"]).contains("e.g. 'ex'"));
+        assert_eq!(
+            inclusive_range_error(1, 5),
+            "must be between 1 and 5, inclusive"
+        );
+    }
 }
