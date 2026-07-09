@@ -1,7 +1,9 @@
 use std::cmp::Ordering;
 use std::path::PathBuf;
 
-use oci_spec::runtime::{Hook, LinuxDevice, LinuxDeviceCgroup, LinuxDeviceType, Mount};
+use oci_spec::runtime::{
+    Hook, LinuxDevice, LinuxDeviceCgroup, LinuxDeviceType, LinuxIntelRdt, LinuxNetDevice, Mount,
+};
 
 use super::config::Generator;
 
@@ -64,6 +66,26 @@ impl Generator {
         }
     }
 
+    pub fn add_linux_net_device(
+        &mut self,
+        host_interface_name: String,
+        net_device: LinuxNetDevice,
+    ) {
+        self.init_config_linux_net_devices();
+        if let Some(linux) = self.config.as_mut().unwrap().linux_mut() {
+            if let Some(net_devices) = linux.net_devices_mut() {
+                net_devices.insert(host_interface_name, net_device);
+            }
+        }
+    }
+
+    pub fn set_linux_intel_rdt(&mut self, intel_rdt: LinuxIntelRdt) {
+        self.init_config_linux();
+        if let Some(linux) = self.config.as_mut().unwrap().linux_mut() {
+            linux.set_intel_rdt(Some(intel_rdt));
+        }
+    }
+
     /// set Linux Intel RDT ClosID
     pub fn set_linux_intel_rdt_clos_id(&mut self, clos_id: String) {
         self.init_config_linux_intel_rdt();
@@ -78,14 +100,11 @@ impl Generator {
     pub fn add_process_additional_gid(&mut self, gid: u32) {
         self.init_config_process();
         if let Some(process) = self.config.as_mut().unwrap().process_mut() {
-            if let Some(additional_gids) = process.user().additional_gids() {
-                let mut tmp_vec = additional_gids.clone();
-                if !additional_gids.contains(&gid) {
-                    tmp_vec.push(gid)
-                }
-
-                process.user_mut().set_additional_gids(Some(tmp_vec));
+            let mut gids = process.user().additional_gids().clone().unwrap_or_default();
+            if !gids.contains(&gid) {
+                gids.push(gid);
             }
+            process.user_mut().set_additional_gids(Some(gids));
         }
     }
 
@@ -265,3 +284,53 @@ impl PartialEq for OrderedMounts {
 }
 
 impl Eq for OrderedMounts {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oci_spec::runtime::LinuxNetDevice;
+
+    #[test]
+    fn add_process_additional_gid_initializes_empty_gid_list() {
+        let mut generator = Generator::spec_gen(Some(oci_spec::runtime::Spec::default()));
+
+        generator.add_process_additional_gid(1000);
+
+        let gids = generator
+            .config
+            .as_ref()
+            .unwrap()
+            .process()
+            .as_ref()
+            .unwrap()
+            .user()
+            .additional_gids()
+            .as_ref()
+            .unwrap();
+        assert_eq!(gids, &vec![1000]);
+    }
+
+    #[test]
+    fn add_linux_net_device_initializes_map_and_sets_entry() {
+        let mut generator = Generator::spec_gen(Some(oci_spec::runtime::Spec::default()));
+        let mut net_device = LinuxNetDevice::default();
+        net_device.set_name(Some("container_eth0".to_string()));
+
+        generator.add_linux_net_device("eth0".to_string(), net_device);
+
+        let net_devices = generator
+            .config
+            .as_ref()
+            .unwrap()
+            .linux()
+            .as_ref()
+            .unwrap()
+            .net_devices()
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            net_devices.get("eth0").unwrap().name().as_ref().unwrap(),
+            "container_eth0"
+        );
+    }
+}

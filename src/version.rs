@@ -18,6 +18,9 @@ const V040: &str = "v0.4.0";
 const V050: &str = "v0.5.0";
 const V060: &str = "v0.6.0";
 const V070: &str = "v0.7.0";
+const V080: &str = "v0.8.0";
+const V100: &str = "v1.0.0";
+const V110: &str = "v1.1.0";
 
 // Earliest supported version of the CDI specification
 const VEARLIEST: &str = V030;
@@ -36,6 +39,9 @@ pub static VALID_SPEC_VERSIONS: Lazy<VersionMap> = Lazy::new(|| {
     map.insert(V050.to_string(), Some(requires_v050));
     map.insert(V060.to_string(), Some(requires_v060));
     map.insert(V070.to_string(), Some(requires_v070));
+    map.insert(V080.to_string(), None);
+    map.insert(V100.to_string(), None);
+    map.insert(V110.to_string(), Some(requires_v110 as RequiredFunc));
     VersionMap(map)
 });
 
@@ -87,6 +93,108 @@ impl VersionWrapper {
 
 pub fn minimum_required_version(spec: &CDISpec) -> Result<VersionWrapper> {
     Ok(VALID_SPEC_VERSIONS.required_version(spec))
+}
+
+pub(crate) fn validate_declared_version_fields(spec: &CDISpec) -> Result<()> {
+    if !VALID_SPEC_VERSIONS.is_valid_version(&spec.version) {
+        return Err(anyhow::anyhow!("invalid version {}", spec.version));
+    }
+
+    let declared = VersionWrapper::new(&spec.version);
+    let v110 = VersionWrapper::new(V110);
+    let declared_is_v110_or_newer = !v110.is_greater_than(&declared);
+
+    for (scope, edits) in spec
+        .container_edits
+        .iter()
+        .map(|edits| ("containerEdits", edits))
+        .chain(
+            spec.devices
+                .iter()
+                .map(|device| ("devices[].containerEdits", &device.container_edits)),
+        )
+    {
+        if let Some(intel_rdt) = &edits.intel_rdt {
+            if declared_is_v110_or_newer {
+                if intel_rdt.enable_cmt.is_some() {
+                    return Err(anyhow::anyhow!(
+                        "{}.intelRdt.enableCMT is not valid for CDI spec version {}",
+                        scope,
+                        spec.version
+                    ));
+                }
+                if intel_rdt.enable_mbm.is_some() {
+                    return Err(anyhow::anyhow!(
+                        "{}.intelRdt.enableMBM is not valid for CDI spec version {}",
+                        scope,
+                        spec.version
+                    ));
+                }
+            } else {
+                if intel_rdt.schemata.is_some() {
+                    return Err(anyhow::anyhow!(
+                        "{}.intelRdt.schemata requires CDI spec version 1.1.0",
+                        scope
+                    ));
+                }
+                if intel_rdt.enable_monitoring.is_some() {
+                    return Err(anyhow::anyhow!(
+                        "{}.intelRdt.enableMonitoring requires CDI spec version 1.1.0",
+                        scope
+                    ));
+                }
+            }
+        }
+
+        if !declared_is_v110_or_newer
+            && edits
+                .net_devices
+                .as_ref()
+                .is_some_and(|devices| !devices.is_empty())
+        {
+            return Err(anyhow::anyhow!(
+                "{}.netDevices requires CDI spec version 1.1.0",
+                scope
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn requires_v110(spec: &CDISpec) -> bool {
+    if let Some(edits) = &spec.container_edits {
+        if edits
+            .net_devices
+            .as_ref()
+            .is_some_and(|devices| !devices.is_empty())
+        {
+            return true;
+        }
+        if let Some(intel_rdt) = &edits.intel_rdt {
+            if intel_rdt.schemata.is_some() || intel_rdt.enable_monitoring.is_some() {
+                return true;
+            }
+        }
+    }
+
+    for dev in &spec.devices {
+        let edits = &dev.container_edits;
+        if edits
+            .net_devices
+            .as_ref()
+            .is_some_and(|devices| !devices.is_empty())
+        {
+            return true;
+        }
+        if let Some(intel_rdt) = &edits.intel_rdt {
+            if intel_rdt.schemata.is_some() || intel_rdt.enable_monitoring.is_some() {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 fn requires_v070(spec: &CDISpec) -> bool {
@@ -168,4 +276,131 @@ fn requires_v040(spec: &CDISpec) -> bool {
         .chain(spec.container_edits.as_ref())
         .flat_map(|edits| edits.mounts.iter().flat_map(|mounts| mounts.iter()))
         .any(|mount| mount.r#type.as_ref().is_some_and(|typ| !typ.is_empty()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::specs::config::{ContainerEdits, Device, IntelRdt, LinuxNetDevice, Spec};
+
+    fn spec_with_edits(version: &str, edits: ContainerEdits) -> Spec {
+        Spec {
+            version: version.to_string(),
+            kind: "vendor.com/device".to_string(),
+            devices: vec![Device {
+                name: "gpu0".to_string(),
+                container_edits: ContainerEdits::default(),
+                ..Default::default()
+            }],
+            container_edits: Some(edits),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn accepts_current_v1_1_0_version() {
+        assert!(VALID_SPEC_VERSIONS.is_valid_version("1.1.0"));
+    }
+
+    #[test]
+    fn recognizes_v0_8_and_v1_0_versions() {
+        assert!(VALID_SPEC_VERSIONS.is_valid_version("0.8.0"));
+        assert!(VALID_SPEC_VERSIONS.is_valid_version("1.0.0"));
+    }
+
+    #[test]
+    fn net_devices_require_v1_1_0() {
+        let spec = spec_with_edits(
+            "1.1.0",
+            ContainerEdits {
+                net_devices: Some(vec![LinuxNetDevice {
+                    host_interface_name: "eth0".to_string(),
+                    name: "container_eth0".to_string(),
+                }]),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            minimum_required_version(&spec).unwrap().to_string(),
+            "1.1.0"
+        );
+    }
+
+    #[test]
+    fn intel_rdt_schemata_requires_v1_1_0() {
+        let spec = spec_with_edits(
+            "1.1.0",
+            ContainerEdits {
+                intel_rdt: Some(IntelRdt {
+                    schemata: Some(vec!["L3:0=ffff".to_string()]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            minimum_required_version(&spec).unwrap().to_string(),
+            "1.1.0"
+        );
+    }
+
+    #[test]
+    fn empty_intel_rdt_schemata_requires_v1_1_0() {
+        let global_spec = spec_with_edits(
+            "1.1.0",
+            ContainerEdits {
+                intel_rdt: Some(IntelRdt {
+                    schemata: Some(Vec::new()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        let device_spec = Spec {
+            version: "1.1.0".to_string(),
+            kind: "vendor.com/device".to_string(),
+            devices: vec![Device {
+                name: "gpu0".to_string(),
+                container_edits: ContainerEdits {
+                    intel_rdt: Some(IntelRdt {
+                        schemata: Some(Vec::new()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            minimum_required_version(&global_spec).unwrap().to_string(),
+            "1.1.0"
+        );
+        assert_eq!(
+            minimum_required_version(&device_spec).unwrap().to_string(),
+            "1.1.0"
+        );
+    }
+
+    #[test]
+    fn intel_rdt_enable_monitoring_requires_v1_1_0() {
+        let spec = spec_with_edits(
+            "1.1.0",
+            ContainerEdits {
+                intel_rdt: Some(IntelRdt {
+                    enable_monitoring: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            minimum_required_version(&spec).unwrap().to_string(),
+            "1.1.0"
+        );
+    }
 }

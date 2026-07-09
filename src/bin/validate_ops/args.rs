@@ -10,17 +10,19 @@ You can use validate in following ways:
 
 1.specify document file as an argument
   validate --schema <schema.json> <document.json>
-    
+
 2.pass document content through a pipe
   cat <document.json> | validate --schema <schema.json>
 
 3.input document content manually, ended with ctrl+d(or your self-defined EOF keys)
   validate --schema <schema.json>
-  [INPUT DOCUMENT CONTENT HERE]	    
+  [INPUT DOCUMENT CONTENT HERE]
+
+Use --schema none to skip schema validation.
 "
 )]
 pub struct ValidateArgs {
-    /// JSON Schema to validate against (default "builtin")
+    /// JSON Schema to validate against: "builtin", "none" to skip validation, or a schema file
     #[arg(long = "schema", default_value = "builtin")]
     pub schema: String,
     /// Document to be validated (default "-") and it's regarded as index argument

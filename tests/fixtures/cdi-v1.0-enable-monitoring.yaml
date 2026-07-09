@@ -1,0 +1,10 @@
+cdiVersion: "1.0.0"
+kind: "vendor.com/device"
+containerEdits:
+  intelRdt:
+    enableMonitoring: false
+devices:
+  - name: "gpu0"
+    containerEdits:
+      deviceNodes:
+        - path: "/dev/null"

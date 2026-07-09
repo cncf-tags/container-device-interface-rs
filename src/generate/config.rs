@@ -65,6 +65,16 @@ impl Generator {
         }
     }
 
+    pub fn init_config_linux_net_devices(&mut self) {
+        self.init_config_linux();
+
+        if let Some(linux) = self.config.as_mut().unwrap().linux_mut() {
+            if linux.net_devices().is_none() {
+                linux.set_net_devices(Some(HashMap::new()));
+            }
+        }
+    }
+
     pub fn init_config_hooks(&mut self) {
         self.init_config();
 

@@ -1,0 +1,8 @@
+cdiVersion: "1.1.0"
+kind: "vendor.com/device"
+unknownTopLevel: true
+devices:
+  - name: "gpu0"
+    containerEdits:
+      deviceNodes:
+        - path: "/dev/null"
