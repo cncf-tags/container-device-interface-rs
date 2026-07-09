@@ -66,8 +66,10 @@ jobs:
         with:
           tool: cargo-llvm-cov@0.8.7
 
+      # Run as root: the mknod device tests self-skip as non-root and their
+      # skipped bodies would count against container_edits_unix.
       - name: Generate coverage
-        run: cargo llvm-cov --locked --all-features --workspace --lcov --output-path lcov.info
+        run: sudo -E env "PATH=$PATH" cargo llvm-cov --locked --all-features --workspace --lcov --output-path lcov.info
 
       - name: Upload coverage to Coveralls
         uses: coverallsapp/github-action@648a8eb78e6d50909eff900e4ec85cab4524a45b # v2.3.6
@@ -77,7 +79,11 @@ jobs:
           format: lcov
 
       # Gate after the upload so Coveralls still receives the report when the
-      # threshold fails. Current baseline is ~34% line coverage; the floor
-      # prevents regressions. Ratchet this up as coverage improves.
-      - name: Enforce minimum 30% line coverage
-        run: cargo llvm-cov report --fail-under-lines 30
+      # threshold fails. `report` rescores the profdata recorded by the
+      # generate step; sudo because that data is root-owned. The per-file
+      # bound stops an aggregate score from masking under-tested modules.
+      # api.rs is exempt: its device-listing printer needs a populated
+      # /etc/cdi, which CI runners do not have. Ratchet both bounds up as
+      # coverage improves (baseline ~90% total, worst file ~72%).
+      - name: Enforce minimum 85% total and 70% per-file line coverage
+        run: sudo -E env "PATH=$PATH" cargo llvm-cov report --fail-under-lines 85 --fail-under-file-lines 70 --ignore-filename-regex 'bin/cdi_ops/api\.rs$'
