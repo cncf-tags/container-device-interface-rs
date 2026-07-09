@@ -55,6 +55,10 @@ jobs:
               - '**/*.lock'
               - 'Cargo.lock'
               - '.cargo/**'
+              # Action/workflow bumps must run the E2E too - a broken or
+              # malicious action update would otherwise merge untested.
+              - '.github/workflows/**'
+              - '.github/actions/**'
 
   ci:
     needs: changes
