@@ -82,7 +82,7 @@ jobs:
 
           # Reset first: the runner is persistent and stacked patch entries
           # break the build. Cargo.lock is not tracked at every kata tag.
-          git -C "${KATA_SRC_DIR}" checkout -- Cargo.toml
+          git -C "${KATA_SRC_DIR}" checkout -- Cargo.toml src/agent/
           git -C "${KATA_SRC_DIR}" checkout -- Cargo.lock 2>/dev/null || true
 
           # Patch at the workspace ROOT: cargo silently ignores [patch] in
@@ -96,8 +96,33 @@ jobs:
             printf '\n[patch.crates-io]\n%s\n' "${patch_line}" >> "${manifest}"
           fi
 
+          # A [patch] only applies if its version satisfies the consumer's
+          # requirement: a semver-major bump in the PR would silently fall
+          # back to crates.io (the provenance check caught this on the first
+          # real PR). Align the agent's requirement with the PR version.
+          ver=$(awk -F'"' '/^version *=/{print $2; exit}' "${GITHUB_WORKSPACE}/Cargo.toml")
+          if [[ -z "${ver}" ]]; then
+            echo "ERROR: cannot parse package version from the PR's Cargo.toml" >&2
+            exit 1
+          fi
+          sed -i -E \
+            -e "s|^(container-device-interface *= *)\"[^\"]+\"|\1\"${ver}\"|" \
+            -e "s|^(container-device-interface *= *\{[^}]*version *= *)\"[^\"]+\"|\1\"${ver}\"|" \
+            "${KATA_SRC_DIR}/src/agent/Cargo.toml"
+
+          # Fail fast if the manifest shape stopped matching the rewrite -
+          # otherwise a semver-major PR silently tests crates.io again.
+          echo "=== agent dependency requirement ==="
+          if ! grep "^container-device-interface" "${KATA_SRC_DIR}/src/agent/Cargo.toml" | grep -F "\"${ver}\""; then
+            echo "ERROR: failed to rewrite the agent's requirement to ${ver}:" >&2
+            grep '^container-device-interface' "${KATA_SRC_DIR}/src/agent/Cargo.toml" >&2 || true
+            exit 1
+          fi
+
+          # Full section up to the next table header - truncated evidence has
+          # already misled a debugging session once.
           echo "=== workspace manifest patch ==="
-          tail -n 5 "${manifest}"
+          awk '/^\[patch\.crates-io\]/{f=1; print; next} f && /^\[/{exit} f' "${manifest}"
 
       - name: Build kata-agent with the patched CDI crate
         run: |
