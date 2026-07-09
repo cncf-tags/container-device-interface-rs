@@ -1,0 +1,292 @@
+# WHY: unit tests can't prove the crate works where it is consumed - inside
+# the kata-agent, resolving a real VFIO device in a real VM. GPU passthrough
+# needs bare metal, hence the self-hosted runner.
+name: Run the CDI CI
+on:
+  workflow_call:
+    inputs:
+      commit-hash:
+        required: true
+        type: string
+      pr-number:
+        required: true
+        type: string
+      tag:
+        required: true
+        type: string
+      target-branch:
+        required: false
+        type: string
+        default: ""
+  # Manual runs against an internal branch, no PR required.
+  workflow_dispatch:
+    inputs:
+      commit-hash:
+        description: "Commit SHA to test (defaults to dispatched ref)"
+        required: false
+        type: string
+        default: ""
+      pr-number:
+        description: "PR number (cosmetic for manual runs)"
+        required: false
+        type: string
+        default: "manual"
+      tag:
+        description: "Tag suffix for build artifacts"
+        required: false
+        type: string
+        default: "manual"
+      target-branch:
+        description: "Base branch (cosmetic for manual runs)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  # Pre-provisioned kata tree: a from-scratch kata build would dominate CI
+  # time; only the agent is rebuilt per run.
+  KATA_SRC_DIR: /home/container-device-interface-rs/actions-runner/_work/kata-containers
+  ROOTFS_IMAGE_DIR: /home/container-device-interface-rs/actions-runner/_work/kata-containers/build/rootfs-image-nvidia-gpu/builddir/rootfs-image/ubuntu_rootfs
+  IMAGE_BUILDER_DIR: /home/container-device-interface-rs/actions-runner/_work/kata-containers/tools/osbuilder/image-builder
+  # The default configuration.toml belongs to the NVRC CI.
+  KATA_CONFIG: /etc/kata-containers/configuration.toml.container-device-interface-rs
+
+jobs:
+  run-e2e-nerdctl-tests:
+    runs-on: g5g.metal
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # workflow_dispatch may leave commit-hash empty; fall back to the
+          # dispatched ref.
+          ref: ${{ inputs.commit-hash != '' && inputs.commit-hash || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Point the kata-agent at the PR's CDI code
+        run: |
+          set -euo pipefail
+
+          echo "=== CDI revision under test ==="
+          git -C "${GITHUB_WORKSPACE}" log -1 --oneline
+
+          # The build container bind-mounts only the kata tree, so the PR
+          # checkout must live inside it.
+          cdi_copy="${KATA_SRC_DIR}/container-device-interface-rs"
+          rm -rf "${cdi_copy}"
+          cp -a "${GITHUB_WORKSPACE}/." "${cdi_copy}"
+          rm -rf "${cdi_copy}/target" # never ship stale build output
+
+          # Reset first: the runner is persistent and stacked patch entries
+          # break the build. Cargo.lock is not tracked at every kata tag.
+          git -C "${KATA_SRC_DIR}" checkout -- Cargo.toml
+          git -C "${KATA_SRC_DIR}" checkout -- Cargo.lock 2>/dev/null || true
+
+          # Patch at the workspace ROOT: cargo silently ignores [patch] in
+          # member manifests and builds the crates.io release instead.
+          # Relative path so it resolves under any mount prefix.
+          manifest="${KATA_SRC_DIR}/Cargo.toml"
+          patch_line="container-device-interface = { path = \"container-device-interface-rs\" }"
+          if grep -q '^\[patch\.crates-io\]' "${manifest}"; then
+            sed -i "/^\[patch\.crates-io\]/a ${patch_line}" "${manifest}"
+          else
+            printf '\n[patch.crates-io]\n%s\n' "${patch_line}" >> "${manifest}"
+          fi
+
+          echo "=== workspace manifest patch ==="
+          tail -n 5 "${manifest}"
+
+      - name: Build kata-agent with the patched CDI crate
+        run: |
+          set -euo pipefail
+
+          cd "${KATA_SRC_DIR}"
+
+          # Stale artifacts or the remote cache would ship an agent that
+          # never compiled the PR code - while the CI reports green.
+          rm -rf build/agent build/kata-static-agent.tar.zst
+          USE_CACHE=no make agent-tarball
+
+      - name: Unpack the new agent into the rootfs
+        run: |
+          set -euo pipefail
+
+          sudo tar --zstd -xvf "${KATA_SRC_DIR}/build/kata-static-agent.tar.zst" -C "${ROOTFS_IMAGE_DIR}"
+
+          agent="${ROOTFS_IMAGE_DIR}/usr/bin/kata-agent"
+          sudo ls -l "${agent}"
+
+          # rustc embeds source paths in panic Location strings: the copy
+          # sits inside the kata workspace, so its paths are compiled
+          # workspace-RELATIVE; a crates.io build embeds the versioned
+          # registry path. Catches a silently ignored [patch] (it happened).
+          if ! sudo grep -aq "container-device-interface-rs/src/" "${agent}"; then
+            echo "ERROR: agent does not contain code compiled from the PR checkout" >&2
+            # Show what IS embedded so the failure is diagnosable.
+            sudo grep -aoE "container-device-interface[^ ]*/src/[a-z_/.]+\.rs" "${agent}" | sort -u | head -n 10 || true
+            exit 1
+          fi
+          if sudo grep -aq "container-device-interface-0.1" "${agent}"; then
+            echo "ERROR: agent contains the crates.io release - patch not honored" >&2
+            exit 1
+          fi
+          echo "VERIFIED: agent built from the PR's CDI sources:"
+          sudo grep -aoE "container-device-interface-rs/src/[a-zA-Z0-9_/.-]+\.rs" "${agent}" | sort -u | head -n 10 || true
+          sudo sha256sum "${agent}"
+
+      - name: Rebuild image with the new agent
+        run: |
+          set -euo pipefail
+
+          # The guest boots the packed image, not the rootfs dir.
+          cd "${IMAGE_BUILDER_DIR}"
+          script -fec "sudo -E AGENT_INIT=no USE_DOCKER=true ./image_builder.sh \"${ROOTFS_IMAGE_DIR}\""
+
+          # Evidence: the image the config boots, with hash.
+          img=$(sudo awk -F'"' '/^image = /{print $2; exit}' "${KATA_CONFIG}")
+          sudo ls -l "$(sudo readlink -f "${img}")"
+          sudo sha256sum "${img}"
+
+      - name: Test WITH nvrc.log=debug (baseline)
+        run: |
+          set -euo pipefail
+
+          # NVRC boots in this image too and logs to kmsg, so the knob is
+          # verifiable in the container's dmesg - per-VM, no journal windows.
+          if ! grep -q "nvrc.log=debug" "${KATA_CONFIG}"; then
+            echo "Adding nvrc.log=debug to ${KATA_CONFIG}"
+            sudo sed -i 's/kernel_params = "/kernel_params = "nvrc.log=debug /' "${KATA_CONFIG}"
+          fi
+
+          grep kernel_params "${KATA_CONFIG}"
+
+          # vfio1: vfio0 belongs to the NVRC CI. --label because nerdctl
+          # propagates labels into OCI annotations (--annotation is missing
+          # on the runner's nerdctl); config_path selects OUR kata config.
+          # set +e: assert on the captured output even when nerdctl fails.
+          set +e
+          output=$(sudo nerdctl run --runtime io.containerd.kata.v2 \
+            --label "io.katacontainers.config_path=${KATA_CONFIG}" \
+            --device /dev/vfio/devices/vfio1 --rm ubuntu -- sh -c "nvidia-smi; dmesg" 2>&1)
+          exit_code=$?
+          set -e
+
+          echo "=== nerdctl output ==="
+          echo "$output"
+          echo "=== nerdctl exit code: $exit_code ==="
+
+          # TODO: non-fatal until kata-containers stops returning 255 on VM teardown.
+          if [ "$exit_code" -ne 0 ]; then
+            echo "WARNING: nerdctl exited with $exit_code (expected 0); ignoring pending kata-containers fix"
+          fi
+
+          if grep -qE 'ttrpc: closed|level=fatal' <<<"$output"; then
+            echo "WARNING: kata-runtime fatal error in nerdctl output (ignoring pending kata-containers fix):"
+            grep -E 'ttrpc: closed|level=fatal' <<<"$output"
+          fi
+
+          if ! grep -q "NVIDIA-SMI" <<<"$output"; then
+            echo "ERROR: nvidia-smi did not produce expected NVIDIA-SMI banner"
+            exit 1
+          fi
+
+          if ! grep -q "NVRC" <<<"$output"; then
+            echo "ERROR: nvrc.log=debug set but no NVRC logs in VM dmesg"
+            exit 1
+          fi
+
+          echo "SUCCESS: nvidia-smi works AND we see NVRC debug logs in VM dmesg"
+
+      - name: Test WITHOUT nvrc.log=debug (regression test)
+        run: |
+          set -euo pipefail
+
+          sudo sed -i 's/nvrc.log=debug *//' "${KATA_CONFIG}"
+
+          grep kernel_params "${KATA_CONFIG}"
+
+          set +e
+          output=$(sudo nerdctl run --runtime io.containerd.kata.v2 \
+            --label "io.katacontainers.config_path=${KATA_CONFIG}" \
+            --device /dev/vfio/devices/vfio1 --rm ubuntu -- sh -c "nvidia-smi; dmesg" 2>&1)
+          exit_code=$?
+          set -e
+
+          echo "=== nerdctl output ==="
+          echo "$output"
+          echo "=== nerdctl exit code: $exit_code ==="
+
+          # TODO: non-fatal until kata-containers stops returning 255 on VM teardown.
+          if [ "$exit_code" -ne 0 ]; then
+            echo "WARNING: nerdctl exited with $exit_code (expected 0); ignoring pending kata-containers fix"
+          fi
+
+          if grep -qE 'ttrpc: closed|level=fatal' <<<"$output"; then
+            echo "WARNING: kata-runtime fatal error in nerdctl output (ignoring pending kata-containers fix):"
+            grep -E 'ttrpc: closed|level=fatal' <<<"$output"
+          fi
+
+          if ! grep -q "NVIDIA-SMI" <<<"$output"; then
+            echo "ERROR: nvidia-smi did not produce expected NVIDIA-SMI banner"
+            exit 1
+          fi
+
+          if grep -q "NVRC" <<<"$output"; then
+            echo "ERROR: Found NVRC logs without nvrc.log=debug!"
+            grep "NVRC" <<<"$output" | head -n 10
+            exit 1
+          fi
+
+          echo "SUCCESS: nvidia-smi works WITHOUT NVRC logs in VM dmesg"
+
+      - name: Dump kata/guest diagnostics on failure
+        # The tests only capture nerdctl's stderr; a "create container
+        # timeout" leaves no guest-side trace without this.
+        if: failure()
+        run: |
+          set -uo pipefail
+
+          echo "::group::kata config (relevant lines) - ${KATA_CONFIG}"
+          sudo grep -nE '^[[:space:]]*(enable_debug|debug_console_enabled|create_container_timeout|dial_timeout|kernel|initrd|image|path|kernel_params|sandbox_cgroup_only)\b' \
+            "${KATA_CONFIG}" || true
+          echo "::endgroup::"
+
+          echo "::group::kata shim version"
+          sudo /opt/kata/bin/containerd-shim-kata-v2 --version || true
+          echo "::endgroup::"
+
+          echo "::group::VFIO / NVIDIA GPU host state"
+          # Confirm vfio1 exists and the GPU is bound to vfio-pci.
+          ls -l /dev/vfio /dev/vfio/devices 2>/dev/null || true
+          lspci -nnk -d 10de: 2>/dev/null || true
+          echo "::endgroup::"
+
+          echo "::group::host dmesg (vfio/iommu/nvidia)"
+          sudo dmesg --ctime 2>/dev/null | grep -iE 'vfio|iommu|nvidia|10de:' | tail -n 100 || true
+          echo "::endgroup::"
+
+          # Pull the journal once; it is enormous with agent.log=debug.
+          journal=$(mktemp)
+          # ${journal} is user-owned; sudo only reads. SC2024 does not apply.
+          # shellcheck disable=SC2024
+          sudo journalctl -t kata --since "20 min ago" -o cat > "${journal}" 2>/dev/null || true
+
+          echo "::group::kata shim errors & warnings (qemu / vfio / agent)"
+          grep -E 'level=(error|warning|fatal)' "${journal}" | tail -n 100 || true
+          echo "::endgroup::"
+
+          echo "::group::guest console - markers (cdi / nvidia / agent / panic)"
+          sed -n 's/.*vmconsole="\(.*\)"$/\1/p' "${journal}" \
+            | grep -iE 'cdi|nvidia|kata-agent| agent |vsock|panic|call trace|BUG:|oops|segfault|out of memory|reached target|started |failed|cannot|/sbin/init|switch_root' \
+            | tail -n 150 || true
+          echo "::endgroup::"
+
+          echo "::group::guest console - tail (raw: shows where boot stopped)"
+          # Unfiltered: an early stall mid-initcall stays visible.
+          sed -n 's/.*vmconsole="\(.*\)"$/\1/p' "${journal}" | tail -n 200 || true
+          echo "::endgroup::"
+
+          rm -f "${journal}"

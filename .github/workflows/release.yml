@@ -2,18 +2,9 @@ name: Release and Publish Rust Crate
 
 on:
   workflow_dispatch:
-    inputs:
-      rust_toolchain:
-        description: "Rust toolchain channel (e.g., stable, 1.81.0)"
-        required: false
-        default: '1.85.1'
-        type: string
 
-# Required for Trusted Publishing (OIDC) with crates.io
-# See: https://crates.io/docs/trusted-publishing
-permissions:
-  contents: write   # needed to create/push tags & (optionally) releases
-  id-token: write   # REQUIRED for crates.io trusted publishing (no API token secret)
+# Default to no permissions; each job requests exactly what it needs.
+permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
@@ -23,19 +14,22 @@ jobs:
     name: Publish to crates.io (Trusted Publishing)
     runs-on: ubuntu-24.04
     environment: release
+    permissions:
+      contents: write   # needed to create/push tags
+      id-token: write   # REQUIRED for crates.io trusted publishing (no API token secret)
     outputs:
       version: ${{ steps.version.outputs.file_version }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: Checkout
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        # Credentials are deliberately persisted: this job pushes the release
+        # tag back to the repository.
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # zizmor: ignore[artipacked]
         with:
           fetch-depth: 0  # ensure tags/history are available
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
-        with:
-          toolchain: ${{ inputs.rust_toolchain }}
+      - name: Install pinned Rust toolchain
+        uses: ./.github/actions/rust-toolchain
 
       - name: Authenticate to crates.io (OIDC)
         id: auth
@@ -63,20 +57,383 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
-  release:
-    name: Create GitHub Release
-    runs-on: ubuntu-24.04
-    environment: release
+  # Build the release binaries (cdi, validate) and the cdylib per target,
+  # package them as a reproducible tarball and keyless-sign it with cosign.
+  build-artifacts:
+    name: Build artifacts (${{ matrix.target }})
     needs: publish
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write # keyless signing with Sigstore
+
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
 
-      - name: Create GitHub Release
+      - name: Install pinned Rust toolchain
+        uses: ./.github/actions/rust-toolchain
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build (${{ matrix.target }})
+        shell: bash
+        # build-release.sh remaps machine-specific paths out of the binaries;
+        # the reproducible-build workflow double-builds with the same script,
+        # so the release bytes stay independently verifiable.
+        run: |
+          set -euxo pipefail
+          mkdir -p dist
+          ./scripts/build-release.sh "${{ matrix.target }}"
+          cp "target/${{ matrix.target }}/release/cdi" dist/
+          cp "target/${{ matrix.target }}/release/validate" dist/
+          cp "target/${{ matrix.target }}/release/libcontainer_device_interface.so" dist/
+
+      - name: Package release tarball (reproducible)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)
+          cd dist
+          BASE="container-device-interface-${{ matrix.target }}"
+          # Create reproducible tarball with stable mtimes/owners
+          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@${SOURCE_DATE_EPOCH}" \
+            -cf "${BASE}.tar" \
+            cdi validate libcontainer_device_interface.so
+          xz -T0 -9e -f "${BASE}.tar"
+
+      - name: Compute digest (sha256sum format)
+        shell: bash
+        run: |
+          cd dist
+          # "<64-hex><space><space><filename>" - consumed by the provenance job
+          sha256sum "container-device-interface-${{ matrix.target }}.tar.xz" \
+            | tee "container-device-interface-${{ matrix.target }}.tar.xz.sha256"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Keyless sign tarball
+        env:
+          COSIGN_EXPERIMENTAL: "true"
+        run: |
+          # Cosign signing outputs: *.sig, *.cert, *.bundle.json (Rekor bundle)
+          TARXZ="dist/container-device-interface-${{ matrix.target }}.tar.xz"
+          cosign sign-blob --yes "$TARXZ" \
+            --output-signature "${TARXZ}.sig" \
+            --output-certificate "${TARXZ}.cert" \
+            --bundle "${TARXZ}.bundle.json"
+
+      - name: Upload dist as artifact (per target)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist-${{ matrix.target }}
+          path: |
+            dist/*.tar.xz
+            dist/*.tar.xz.*
+          if-no-files-found: error
+          overwrite: true
+
+  # One dependency SBOM from Cargo.lock covers both targets.
+  sbom:
+    name: Generate and sign SBOM
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write # keyless signing with Sigstore
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+
+      - name: Generate SBOM (SPDX JSON)
+        uses: anchore/sbom-action@f8bdd1d8ac5e901a77a92f111440fdb1b593736b # v0.20.6
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/sbom-container-device-interface.spdx.json
+          upload-artifact: false
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Keyless sign SBOM
+        env:
+          COSIGN_EXPERIMENTAL: "true"
+        run: |
+          SBOM="dist/sbom-container-device-interface.spdx.json"
+          cosign sign-blob --yes "$SBOM" \
+            --output-signature "${SBOM}.sig" \
+            --output-certificate "${SBOM}.cert" \
+            --bundle "${SBOM}.bundle.json"
+
+      - name: Upload SBOM as artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist-sbom
+          path: dist/*
+          if-no-files-found: error
+          overwrite: true
+
+  # Draft release first; it is only published once every asset - including
+  # SLSA provenance - is attached and verified.
+  create-release:
+    name: Create draft GitHub Release
+    needs: [publish, build-artifacts, sbom]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # create the draft release and upload assets
+      actions: read   # download build artifacts
+    steps:
+      - name: Download all dist artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create draft GitHub Release and upload assets
         uses: softprops/action-gh-release@aec2ec56f94eb8180ceec724245f64ef008b89f5  # v2.4.0
         with:
           tag_name: ${{ needs.publish.outputs.tag }}
           name: ${{ needs.publish.outputs.tag }}
+          draft: true
           body: |
             Release ${{ needs.publish.outputs.version }} published to crates.io.
             Crate on crates.io: https://crates.io/crates/container-device-interface
+          files: |
+            dist/container-device-interface-x86_64-unknown-linux-gnu.tar.xz
+            dist/container-device-interface-x86_64-unknown-linux-gnu.tar.xz.sig
+            dist/container-device-interface-x86_64-unknown-linux-gnu.tar.xz.cert
+            dist/container-device-interface-x86_64-unknown-linux-gnu.tar.xz.bundle.json
+            dist/container-device-interface-aarch64-unknown-linux-gnu.tar.xz
+            dist/container-device-interface-aarch64-unknown-linux-gnu.tar.xz.sig
+            dist/container-device-interface-aarch64-unknown-linux-gnu.tar.xz.cert
+            dist/container-device-interface-aarch64-unknown-linux-gnu.tar.xz.bundle.json
+            dist/sbom-container-device-interface.spdx.json
+            dist/sbom-container-device-interface.spdx.json.sig
+            dist/sbom-container-device-interface.spdx.json.cert
+            dist/sbom-container-device-interface.spdx.json.bundle.json
+
+  provenance-hash-all:
+    name: Collect provenance subjects
+    needs: build-artifacts
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read # download build artifacts
+    outputs:
+      map: ${{ steps.mkmap.outputs.map }}
+    steps:
+      - name: Download all dist artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+      - name: Build base64 map from *.sha256
+        id: mkmap
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          # Build JSON map: { "<tarball>": "<base64(sha256sum line)>", ... }
+          echo '{}' > map.json
+          for f in *.sha256; do
+            [ -f "$f" ] || continue
+            key="${f%.sha256}"
+            b64=$(base64 -w0 "$f")
+            jq --arg k "$key" --arg v "$b64" '. + {($k): $v}' map.json > tmp.json && mv tmp.json map.json
+          done
+          echo "map=$(jq -c . map.json)" >> "$GITHUB_OUTPUT"
+
+  provenance:
+    needs: provenance-hash-all
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    # The SLSA generator MUST be referenced by tag, not SHA - their docs and
+    # verifier depend on it (slsa-framework/slsa-github-generator#722).
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0 # zizmor: ignore[unpinned-uses]
+    with:
+      base64-subjects: ${{ fromJSON(needs.provenance-hash-all.outputs.map)[format('container-device-interface-{0}.tar.xz', matrix.target)] }}
+      upload-assets: false
+
+  provenance-publish:
+    name: Attach provenance to draft Release
+    needs: [publish, provenance, create-release]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # upload provenance to the draft release
+      actions: read   # download provenance artifact
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+    steps:
+      - name: Download provenance artifact for this target
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: container-device-interface-${{ matrix.target }}.tar.xz.intoto.jsonl
+          path: prov
+      - name: Upload provenance to draft Release
+        uses: softprops/action-gh-release@aec2ec56f94eb8180ceec724245f64ef008b89f5  # v2.4.0
+        with:
+          tag_name: ${{ needs.publish.outputs.tag }}
+          draft: true
+          files: prov/container-device-interface-${{ matrix.target }}.tar.xz.intoto.jsonl
+
+  publish-release:
+    name: Verify assets and publish Release
+    needs: [publish, provenance-publish]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # flip the draft release to published
+    steps:
+      - name: Verify draft release has all required assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.publish.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          # Get list of assets in the draft release
+          ASSETS=$(gh release view "$TAG" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' | sort)
+
+          # Define expected assets
+          EXPECTED=(
+            "container-device-interface-x86_64-unknown-linux-gnu.tar.xz"
+            "container-device-interface-x86_64-unknown-linux-gnu.tar.xz.sig"
+            "container-device-interface-x86_64-unknown-linux-gnu.tar.xz.cert"
+            "container-device-interface-x86_64-unknown-linux-gnu.tar.xz.bundle.json"
+            "container-device-interface-x86_64-unknown-linux-gnu.tar.xz.intoto.jsonl"
+            "container-device-interface-aarch64-unknown-linux-gnu.tar.xz"
+            "container-device-interface-aarch64-unknown-linux-gnu.tar.xz.sig"
+            "container-device-interface-aarch64-unknown-linux-gnu.tar.xz.cert"
+            "container-device-interface-aarch64-unknown-linux-gnu.tar.xz.bundle.json"
+            "container-device-interface-aarch64-unknown-linux-gnu.tar.xz.intoto.jsonl"
+            "sbom-container-device-interface.spdx.json"
+            "sbom-container-device-interface.spdx.json.sig"
+            "sbom-container-device-interface.spdx.json.cert"
+            "sbom-container-device-interface.spdx.json.bundle.json"
+          )
+
+          MISSING=()
+          for asset in "${EXPECTED[@]}"; do
+            if ! echo "$ASSETS" | grep -qx "$asset"; then
+              MISSING+=("$asset")
+            fi
+          done
+
+          if [[ ${#MISSING[@]} -gt 0 ]]; then
+            echo "ERROR: Draft release is missing required assets:" >&2
+            printf '  - %s\n' "${MISSING[@]}" >&2
+            exit 1
+          fi
+
+          echo "All ${#EXPECTED[@]} required assets present in draft release"
+
+      - name: Publish draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.publish.outputs.tag }}
+        run: |
+          gh release edit "${TAG}" \
+            --repo "${{ github.repository }}" \
+            --draft=false
+
+  verify-release:
+    name: Verify signatures and provenance
+    needs: [publish, publish-release]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read # download release assets
+    steps:
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Install SLSA verifier
+        uses: slsa-framework/slsa-verifier/actions/installer@ea584f4502babc6f60d9bc799dbbb13c1caa9ee6
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.publish.outputs.tag }}
+        run: |
+          gh release download "${TAG}" --repo "${{ github.repository }}" --dir .
+
+      - name: Verify tarballs, SBOM signatures, Rekor, and SLSA provenance
+        env:
+          # Expanded via env (not inline templates) so no context value can be
+          # interpreted as shell code.
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          GH_REF: ${{ github.ref }}
+        run: |
+          set -euxo pipefail
+
+          # Reusable Cosign identity pins (GitHub Actions keyless cert constraints)
+          COSIGN_PINS=(
+            --certificate-identity "https://github.com/${WORKFLOW_REF}"
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+            --certificate-github-workflow-repository "${{ github.repository }}"
+            --certificate-github-workflow-ref "${GH_REF}"
+            --certificate-github-workflow-sha "${{ github.sha }}"
+            --certificate-github-workflow-name "${WORKFLOW_NAME}"
+            --certificate-github-workflow-trigger "${{ github.event_name }}"
+          )
+
+          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            TARXZ="container-device-interface-${target}.tar.xz"
+
+            # 1) ONLINE verification via Rekor transparency log
+            cosign verify-blob \
+              --rekor-url https://rekor.sigstore.dev \
+              "${COSIGN_PINS[@]}" \
+              --certificate "${TARXZ}.cert" \
+              --signature   "${TARXZ}.sig" \
+              "${TARXZ}"
+
+            # 2) OFFLINE verification using the Sigstore bundle (no network)
+            cosign verify-blob \
+              --bundle "${TARXZ}.bundle.json" \
+              "${COSIGN_PINS[@]}" \
+              "${TARXZ}"
+
+            # 3) Verify SLSA provenance (built from main)
+            slsa-verifier verify-artifact "${TARXZ}" \
+              --provenance-path "${TARXZ}.intoto.jsonl" \
+              --source-uri "github.com/${{ github.repository }}" \
+              --source-branch "main"
+          done
+
+          # SBOM signature - online and offline
+          SBOM="sbom-container-device-interface.spdx.json"
+          cosign verify-blob \
+            --rekor-url https://rekor.sigstore.dev \
+            "${COSIGN_PINS[@]}" \
+            --certificate "${SBOM}.cert" \
+            --signature   "${SBOM}.sig" \
+            "${SBOM}"
+          cosign verify-blob \
+            --bundle "${SBOM}.bundle.json" \
+            "${COSIGN_PINS[@]}" \
+            "${SBOM}"

@@ -1,0 +1,58 @@
+name: Reproducible build
+
+# Build the tree twice, varying the inputs a verifier cannot copy from CI
+# (workspace directory, CARGO_HOME), and require identical sha256 for every
+# release artifact. Guards the provenance story: a release hash is only
+# verifiable if anyone can rebuild the same bytes.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  double-build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        uses: ./.github/actions/rust-toolchain
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build twice from different locations
+        shell: bash
+        # Same script the release workflow runs, so the check cannot drift
+        # from what ships.
+        run: |
+          set -euxo pipefail
+          for build in first second-deliberately-longer-path; do
+            src="${RUNNER_TEMP}/${build}/src"
+            mkdir -p "$src" "${RUNNER_TEMP}/${build}/cargo-home"
+            cp -a . "$src"
+            (cd "$src" && CARGO_HOME="${RUNNER_TEMP}/${build}/cargo-home" \
+              ./scripts/build-release.sh "${{ matrix.target }}")
+            for artifact in cdi validate libcontainer_device_interface.so; do
+              sha256sum "$src/target/${{ matrix.target }}/release/${artifact}" \
+                | awk '{print $1}' >> "${RUNNER_TEMP}/${build}.hashes"
+            done
+          done
+          if ! diff "${RUNNER_TEMP}/first.hashes" \
+                    "${RUNNER_TEMP}/second-deliberately-longer-path.hashes"; then
+            echo "::error::build is not reproducible: artifact hashes differ between locations" >&2
+            exit 1
+          fi
+          echo "reproducible: all artifact hashes identical across build locations"
