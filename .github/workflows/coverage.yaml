@@ -66,10 +66,14 @@ jobs:
         with:
           tool: cargo-llvm-cov@0.8.7
 
-      # Run as root: the mknod device tests self-skip as non-root and their
-      # skipped bodies would count against container_edits_unix.
+      # Two passes merged into one profile: the root pass executes the mknod
+      # device tests, the non-root pass executes their skip branches -
+      # either alone leaves the other side uncovered.
       - name: Generate coverage
-        run: sudo -E env "PATH=$PATH" cargo llvm-cov --locked --all-features --workspace --lcov --output-path lcov.info
+        run: |
+          cargo llvm-cov --locked --all-features --workspace --no-report
+          sudo -E env "PATH=$PATH" cargo llvm-cov --locked --all-features --workspace --no-report
+          sudo -E env "PATH=$PATH" cargo llvm-cov report --lcov --output-path lcov.info
 
       - name: Upload coverage to Coveralls
         uses: coverallsapp/github-action@648a8eb78e6d50909eff900e4ec85cab4524a45b # v2.3.6
@@ -80,9 +84,8 @@ jobs:
 
       # Gate after the upload so Coveralls still receives the report when the
       # threshold fails. `report` rescores the profdata recorded by the
-      # generate step; sudo because that data is root-owned. The per-file
-      # bound stops an aggregate score from masking under-tested modules.
-      # Ratchet both bounds up as coverage improves (baseline ~96% total,
-      # worst file ~86%).
-      - name: Enforce minimum 92% total and 80% per-file line coverage
-        run: sudo -E env "PATH=$PATH" cargo llvm-cov report --fail-under-lines 92 --fail-under-file-lines 80
+      # generate steps; sudo because that data is root-owned. The per-file
+      # bound stops an aggregate score from masking under-tested modules
+      # (baseline ~98% total, worst file ~95.5%).
+      - name: Enforce minimum 95% total and per-file line coverage
+        run: sudo -E env "PATH=$PATH" cargo llvm-cov report --fail-under-lines 95 --fail-under-file-lines 95

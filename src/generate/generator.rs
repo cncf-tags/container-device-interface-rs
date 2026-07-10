@@ -505,4 +505,73 @@ mod tests {
             "container_eth0"
         );
     }
+
+    // An all-None spec (unlike Spec::default(), which comes pre-populated)
+    // drives the create-the-layer arms of every add_/init_ helper.
+    fn empty_gen() -> Generator {
+        let mut bare = Spec::default();
+        bare.set_process(None)
+            .set_linux(None)
+            .set_hooks(None)
+            .set_mounts(None);
+        Generator::spec_gen(Some(bare))
+    }
+
+    #[test]
+    fn helpers_create_missing_layers_on_empty_specs() {
+        let mut g = empty_gen();
+        let mut dev = LinuxDevice::default();
+        dev.set_path(PathBuf::from("/dev/x"));
+        g.remove_device("/dev/x"); // no devices list yet: no-op arm
+        g.add_device(dev);
+        g.add_linux_resources_device(true, LinuxDeviceType::C, Some(1), Some(3), None);
+        let mut net_device = LinuxNetDevice::default();
+        net_device.set_name(Some("c".to_string()));
+        g.add_linux_net_device("eth0".to_string(), net_device);
+        g.set_linux_intel_rdt_clos_id("clos".to_string());
+        g.add_process_additional_gid(9);
+        g.add_multiple_process_env(&["K=V".to_string()]);
+        g.add_prestart_hook(Hook::default());
+        g.add_poststart_hook(Hook::default());
+        g.add_poststop_hook(Hook::default());
+        g.add_createruntime_hook(Hook::default());
+        g.add_createcontainer_hook(Hook::default());
+        g.add_startcontainer_hook(Hook::default());
+        g.add_mount(Mount::default());
+        g.sort_mounts();
+        g.clear_mounts();
+        assert!(g.list_mounts().is_none());
+
+        let binding = g.config.unwrap();
+        assert_eq!(
+            binding
+                .linux()
+                .as_ref()
+                .unwrap()
+                .devices()
+                .as_ref()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(binding.hooks().is_some());
+    }
+
+    #[test]
+    fn ordered_mounts_compare_by_depth_then_path() {
+        let mount = |dest: &str| {
+            let mut m = Mount::default();
+            m.set_destination(PathBuf::from(dest));
+            m
+        };
+        let shallow = OrderedMounts::new(vec![mount("/a")]);
+        let deep = OrderedMounts::new(vec![mount("/a/b")]);
+        let deep_b = OrderedMounts::new(vec![mount("/a/c")]);
+
+        assert!(shallow < deep);
+        assert!(deep < deep_b);
+        assert_eq!(deep.partial_cmp(&deep_b), Some(Ordering::Less));
+        assert_eq!(shallow.parts(0), 2);
+        assert!(shallow == OrderedMounts::new(vec![mount("/a")]));
+    }
 }

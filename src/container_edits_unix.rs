@@ -256,4 +256,15 @@ mod tests {
         let result = dev_node.fill_missing_info();
         assert!(result.is_err());
     }
+
+    #[test]
+    fn create_device_reports_mknod_failures() {
+        if !is_root() {
+            println!("INFO: skipping, needs root");
+            return;
+        }
+        // mknod in a nonexistent directory fails: the error branch of the
+        // helper every root test depends on.
+        assert!(create_device("/nonexistent-dir/dev", 0o666, 0x0101, "b").is_err());
+    }
 }

@@ -84,7 +84,14 @@ mod tests {
     // every test in this binary.
     #[test]
     fn list_and_inject_through_the_default_cache() {
-        // Before any spec dir is configured the list is empty: early return.
+        // Empty spec dir first: the "No CDI devices found" early return.
+        let empty = tempfile::tempdir().unwrap();
+        configure(vec![
+            with_spec_dirs(&[empty.path().to_str().unwrap()]),
+            with_auto_refresh(false),
+        ])
+        .unwrap();
+        refresh().unwrap();
         cdi_list_devices(false, " ").unwrap();
 
         let dir = tempfile::tempdir().unwrap();
@@ -128,5 +135,28 @@ devices:
         let env = oci_spec.process().as_ref().unwrap().env().as_ref().unwrap();
         assert!(env.contains(&"VENDOR=1".to_string()));
         assert!(env.contains(&"GLOBAL=1".to_string()));
+
+        // A loadable spec whose device node cannot be stat'ed fails at
+        // inject time (fill_missing_info) - the error-print path.
+        fs::write(
+            dir.path().join("broken.yaml"),
+            r#"cdiVersion: "0.6.0"
+kind: "vendor2.com/device"
+devices:
+  - name: "bad0"
+    containerEdits:
+      deviceNodes:
+        - path: "/nonexistent/device/node"
+"#,
+        )
+        .unwrap();
+        refresh().unwrap();
+        let mut oci_spec = oci::Spec::default();
+        cdi_inject_devices(
+            &mut oci_spec,
+            vec!["vendor2.com/device=bad0".to_string()],
+            "yaml",
+        )
+        .unwrap();
     }
 }
