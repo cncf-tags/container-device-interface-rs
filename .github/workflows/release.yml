@@ -9,32 +9,32 @@ permissions: {}
 env:
   CARGO_TERM_COLOR: always
 
+# Ordering: everything reversible first, the irreversible last. The GitHub
+# release is fully assembled, verified, and published before crates.io is
+# touched - a crates.io version can never be re-uploaded, a release can be
+# deleted and the run repeated from scratch.
 jobs:
-  publish:
-    name: Publish to crates.io (Trusted Publishing)
+  # Fail fast if any trace of the version already exists. Releases are
+  # deterministic: a half-published version is reset manually (delete the
+  # tag/release), never skipped over.
+  version:
+    name: Derive and validate version
     runs-on: ubuntu-24.04
-    environment: release
     permissions:
-      contents: write   # needed to create/push tags
-      id-token: write   # REQUIRED for crates.io trusted publishing (no API token secret)
+      contents: read
     outputs:
       version: ${{ steps.version.outputs.file_version }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: Checkout
-        # Credentials are deliberately persisted: this job pushes the release
-        # tag back to the repository.
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # zizmor: ignore[artipacked]
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
-          fetch-depth: 0  # ensure tags/history are available
+          persist-credentials: false
 
       - name: Install pinned Rust toolchain
         uses: ./.github/actions/rust-toolchain
 
-      - name: Authenticate to crates.io (OIDC)
-        id: auth
-        uses: rust-lang/crates-io-auth-action@e919bc7605cde86df457cf5b93c5e103838bd879
-      - name: Derive version from Cargo.toml and create tag
+      - name: Derive version and fail if it already exists
         id: version
         shell: bash
         run: |
@@ -44,24 +44,22 @@ jobs:
             echo "::error::version not found in Cargo.toml"; exit 1
           fi
           TAG="v${FILE_VERSION}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::tag ${TAG} already exists"; exit 1
+          fi
           echo "file_version=${FILE_VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          # Create and push tag; if it already exists, this will fail (desired)
-          git tag "${TAG}"
-          git push origin "${TAG}"
 
-      # Trusted Publishing via OIDC: no CARGO_REGISTRY_TOKEN is needed.
-      # Make sure the crate is configured on crates.io with a GitHub publisher link.
-      - name: Publish
-        run: cargo publish
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+      # Surfaces packaging/manifest errors before any artifact is built,
+      # so the real publish at the end cannot fail for packaging reasons.
+      - name: Validate crate packaging (dry run)
+        run: cargo publish --dry-run --locked
 
   # Build the release binaries (cdi, validate) and the cdylib per target,
   # package them as a reproducible tarball and keyless-sign it with cosign.
   build-artifacts:
     name: Build artifacts (${{ matrix.target }})
-    needs: publish
+    needs: version
     strategy:
       matrix:
         include:
@@ -146,7 +144,7 @@ jobs:
   # One dependency SBOM from Cargo.lock covers both targets.
   sbom:
     name: Generate and sign SBOM
-    needs: publish
+    needs: version
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -157,6 +155,11 @@ jobs:
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
           persist-credentials: false
+
+      # sbom-action writes output-file verbatim and does not create parent
+      # directories; without this the job dies with ENOENT after the scan.
+      - name: Create dist directory
+        run: mkdir -p dist
 
       - name: Generate SBOM (SPDX JSON)
         uses: anchore/sbom-action@f8bdd1d8ac5e901a77a92f111440fdb1b593736b # v0.20.6
@@ -188,10 +191,11 @@ jobs:
           overwrite: true
 
   # Draft release first; it is only published once every asset - including
-  # SLSA provenance - is attached and verified.
+  # SLSA provenance - is attached and verified. Publishing the draft is what
+  # creates the tag (at target_commitish); no job pushes tags via git.
   create-release:
     name: Create draft GitHub Release
-    needs: [publish, build-artifacts, sbom]
+    needs: [version, build-artifacts, sbom]
     runs-on: ubuntu-24.04
     permissions:
       contents: write # create the draft release and upload assets
@@ -207,12 +211,13 @@ jobs:
       - name: Create draft GitHub Release and upload assets
         uses: softprops/action-gh-release@aec2ec56f94eb8180ceec724245f64ef008b89f5  # v2.4.0
         with:
-          tag_name: ${{ needs.publish.outputs.tag }}
-          name: ${{ needs.publish.outputs.tag }}
+          tag_name: ${{ needs.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ needs.version.outputs.tag }}
           draft: true
           body: |
-            Release ${{ needs.publish.outputs.version }} published to crates.io.
-            Crate on crates.io: https://crates.io/crates/container-device-interface
+            Release ${{ needs.version.outputs.version }}.
+            Crate on crates.io: https://crates.io/crates/container-device-interface/${{ needs.version.outputs.version }}
           files: |
             dist/container-device-interface-x86_64-unknown-linux-gnu.tar.xz
             dist/container-device-interface-x86_64-unknown-linux-gnu.tar.xz.sig
@@ -278,7 +283,7 @@ jobs:
 
   provenance-publish:
     name: Attach provenance to draft Release
-    needs: [publish, provenance, create-release]
+    needs: [version, provenance, create-release]
     runs-on: ubuntu-24.04
     permissions:
       contents: write # upload provenance to the draft release
@@ -297,26 +302,37 @@ jobs:
       - name: Upload provenance to draft Release
         uses: softprops/action-gh-release@aec2ec56f94eb8180ceec724245f64ef008b89f5  # v2.4.0
         with:
-          tag_name: ${{ needs.publish.outputs.tag }}
+          tag_name: ${{ needs.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           draft: true
           files: prov/container-device-interface-${{ matrix.target }}.tar.xz.intoto.jsonl
 
   publish-release:
     name: Verify assets and publish Release
-    needs: [publish, provenance-publish]
+    needs: [version, provenance-publish]
     runs-on: ubuntu-24.04
     permissions:
       contents: write # flip the draft release to published
     steps:
       - name: Verify draft release has all required assets
+        id: draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.publish.outputs.tag }}
+          TAG: ${{ needs.version.outputs.tag }}
         run: |
           set -euo pipefail
 
-          # Get list of assets in the draft release
-          ASSETS=$(gh release view "$TAG" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' | sort)
+          # Drafts are not addressable by tag (the tag does not exist yet);
+          # look the release up by tag_name and address it by id.
+          RELEASE=$(gh api "repos/${{ github.repository }}/releases" \
+            --jq "[.[] | select(.tag_name==\"${TAG}\" and .draft)][0]")
+          if [[ -z "$RELEASE" || "$RELEASE" == "null" ]]; then
+            echo "::error::no draft release found for ${TAG}"; exit 1
+          fi
+          RELEASE_ID=$(jq -r '.id' <<<"$RELEASE")
+          echo "release_id=${RELEASE_ID}" >> "$GITHUB_OUTPUT"
+
+          ASSETS=$(jq -r '.assets[].name' <<<"$RELEASE" | sort)
 
           # Define expected assets
           EXPECTED=(
@@ -351,18 +367,50 @@ jobs:
 
           echo "All ${#EXPECTED[@]} required assets present in draft release"
 
+      # Publishing the draft creates the tag at target_commitish.
       - name: Publish draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.publish.outputs.tag }}
+          RELEASE_ID: ${{ steps.draft.outputs.release_id }}
         run: |
-          gh release edit "${TAG}" \
-            --repo "${{ github.repository }}" \
-            --draft=false
+          gh api -X PATCH "repos/${{ github.repository }}/releases/${RELEASE_ID}" \
+            -F draft=false
+
+  # Trusted Publishing via OIDC: no CARGO_REGISTRY_TOKEN is needed.
+  # Make sure the crate is configured on crates.io with a GitHub publisher
+  # link (environment: release). Last on purpose: crates.io is the only
+  # irreversible step, everything before it can be deleted and redone.
+  publish-crate:
+    name: Publish to crates.io (Trusted Publishing)
+    needs: [version, publish-release]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # REQUIRED for crates.io trusted publishing (no API token secret)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        uses: ./.github/actions/rust-toolchain
+
+      - name: Authenticate to crates.io (OIDC)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@e919bc7605cde86df457cf5b93c5e103838bd879
+
+      # Deliberately no existence pre-check anywhere: cargo publish itself
+      # fails hard on a duplicate version - never skipped over.
+      - name: Publish
+        run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   verify-release:
     name: Verify signatures and provenance
-    needs: [publish, publish-release]
+    needs: [version, publish-crate]
     runs-on: ubuntu-24.04
     permissions:
       contents: read # download release assets
@@ -376,7 +424,7 @@ jobs:
       - name: Download release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.publish.outputs.tag }}
+          TAG: ${{ needs.version.outputs.tag }}
         run: |
           gh release download "${TAG}" --repo "${{ github.repository }}" --dir .
 
