@@ -139,7 +139,7 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::annotations::{
-        annotation_key, annotation_value, parse_annotations, ANNOTATION_PREFIX,
+        annotation_key, annotation_value, parse_annotations, update_annotations, ANNOTATION_PREFIX,
     };
 
     #[test]
@@ -269,5 +269,45 @@ mod tests {
             let device_id = &case.device_id;
             assert!(annotation_key(plugin_name, device_id).is_err());
         }
+    }
+
+    #[test]
+    fn update_annotations_inserts_and_detects_collisions() {
+        let annotations = update_annotations(
+            None,
+            "vendor.device-type",
+            "gpu0",
+            vec!["vendor.com/class=dev0".to_string()],
+        )
+        .unwrap();
+        assert_eq!(annotations.len(), 1);
+        let value = annotations.values().next().unwrap();
+        assert_eq!(value, "vendor.com/class=dev0");
+
+        let err = update_annotations(
+            Some(annotations),
+            "vendor.device-type",
+            "gpu0",
+            vec!["vendor.com/class=dev1".to_string()],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("collision"));
+    }
+
+    #[test]
+    fn annotation_key_rejects_empty_parts() {
+        assert!(annotation_key("", "id").is_err());
+        assert!(annotation_key("plugin", "").is_err());
+    }
+
+    #[test]
+    fn parse_annotations_rejects_unqualified_devices() {
+        let mut annotations = HashMap::new();
+        annotations.insert(
+            format!("{}vendor.device-type_gpu0", ANNOTATION_PREFIX),
+            "not-a-qualified-name".to_string(),
+        );
+        let err = parse_annotations(&annotations).unwrap_err();
+        assert!(err.to_string().contains("invalid CDI device name"));
     }
 }

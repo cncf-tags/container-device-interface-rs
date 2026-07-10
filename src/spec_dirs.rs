@@ -145,5 +145,81 @@ pub(crate) fn scan_spec_dirs<P: AsRef<Path>>(dirs: &[P]) -> Result<Vec<Spec>, Bo
 
 #[cfg(test)]
 mod tests {
-    //TODO
+    use super::*;
+    use std::collections::HashMap;
+    use std::fs;
+
+    const SPEC_YAML: &str = r#"cdiVersion: "0.6.0"
+kind: "vendor.com/device"
+devices:
+  - name: "gpu0"
+    containerEdits:
+      env:
+        - "VENDOR=1"
+"#;
+
+    const SPEC_JSON: &str = r#"{
+  "cdiVersion": "0.6.0",
+  "kind": "vendor2.com/device",
+  "devices": [
+    { "name": "d0", "containerEdits": { "env": ["OTHER=1"] } }
+  ]
+}"#;
+
+    #[test]
+    fn with_spec_dirs_cleans_paths() {
+        let mut cache = Cache::default();
+        with_spec_dirs(&["/etc/cdi/../cdi", "/var/run/cdi/"])(&mut cache);
+        assert_eq!(cache.spec_dirs, vec!["/etc/cdi", "/var/run/cdi"]);
+    }
+
+    #[test]
+    fn spec_error_display_and_conversion() {
+        let mut errors: HashMap<String, Vec<Box<dyn Error>>> = HashMap::new();
+        errors.insert(
+            "/etc/cdi/broken.yaml".to_string(),
+            vec![Box::new(SpecError::new("bad spec"))],
+        );
+
+        let converted = convert_errors(&errors);
+        let msgs = &converted["/etc/cdi/broken.yaml"];
+        assert_eq!(msgs.len(), 1);
+        assert!(msgs[0].to_string().contains("bad spec"));
+    }
+
+    #[test]
+    fn scan_finds_specs_recursively_with_dir_index_as_priority() {
+        let low = tempfile::tempdir().unwrap();
+        let high = tempfile::tempdir().unwrap();
+        fs::write(low.path().join("vendor.yaml"), SPEC_YAML).unwrap();
+        // json spec in a nested subdir: traversal must descend
+        let nested = high.path().join("nested");
+        fs::create_dir(&nested).unwrap();
+        fs::write(nested.join("vendor2.json"), SPEC_JSON).unwrap();
+        // non-spec files are ignored
+        fs::write(high.path().join("README.txt"), "not a spec").unwrap();
+
+        let specs = scan_spec_dirs(&[low.path(), high.path()]).unwrap();
+
+        assert_eq!(specs.len(), 2);
+        let by_vendor: HashMap<_, _> = specs
+            .iter()
+            .map(|s| (s.get_vendor().to_string(), s.get_priority()))
+            .collect();
+        assert_eq!(by_vendor["vendor.com"], 0);
+        assert_eq!(by_vendor["vendor2.com"], 1);
+    }
+
+    #[test]
+    fn scan_skips_missing_dirs() {
+        let specs = scan_spec_dirs(&["/nonexistent/cdi/dir"]).unwrap();
+        assert!(specs.is_empty());
+    }
+
+    #[test]
+    fn scan_fails_on_invalid_spec() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("broken.yaml"), "cdiVersion: [not a spec").unwrap();
+        assert!(scan_spec_dirs(&[dir.path()]).is_err());
+    }
 }

@@ -177,4 +177,30 @@ index: 35
 "#;
         assert_eq!(result.trim(), expected.trim());
     }
+
+    #[test]
+    fn choose_format_prefers_explicit_then_extension() {
+        assert_eq!(choose_format("json", "/x.yaml"), "json");
+        assert_eq!(choose_format("", "/x.json"), "json");
+        assert_eq!(choose_format("", "/x.yaml"), "yaml");
+        assert_eq!(choose_format("", "/x.txt"), "");
+        assert_eq!(choose_format("", "no-extension"), "");
+    }
+
+    #[test]
+    fn marshal_indents_every_line_in_both_formats() {
+        #[derive(serde::Serialize)]
+        struct Obj {
+            a: u32,
+            b: String,
+        }
+        let obj = Obj {
+            a: 1,
+            b: "x".to_string(),
+        };
+        for format in ["json", "yaml"] {
+            let out = marshal_object(2, &obj, format);
+            assert!(out.lines().all(|l| l.starts_with("  ")), "{format}: {out}");
+        }
+    }
 }

@@ -21,7 +21,9 @@ use crate::{
     },
 };
 
-const DEFAULT_SPEC_EXT_SUFFIX: &str = ".yaml";
+// No leading dot: Path::set_extension takes the extension itself; a
+// dotted value produces "spec..yaml".
+const DEFAULT_SPEC_EXT_SUFFIX: &str = "yaml";
 
 // Spec represents a single CDI Spec. It is usually loaded from a
 // file and stored in a cache. The Spec has an associated priority.
@@ -270,5 +272,83 @@ mod tests {
         let err = format!("{err:?}");
 
         assert!(err.contains("empty device edits"), "{err}");
+    }
+
+    fn one_device(name: &str) -> crate::specs::config::Device {
+        crate::specs::config::Device {
+            name: name.to_string(),
+            container_edits: crate::specs::config::ContainerEdits {
+                env: Some(vec!["X=1".to_string()]),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn new_spec_rejects_duplicate_device_names() {
+        let raw = crate::specs::config::Spec {
+            version: "0.6.0".to_string(),
+            kind: "vendor.com/device".to_string(),
+            devices: vec![one_device("d0"), one_device("d0")],
+            ..Default::default()
+        };
+        let err = new_spec(&raw, &PathBuf::from("/tmp/x.yaml"), 0).unwrap_err();
+        assert!(format!("{err:?}").contains("multiple device"));
+    }
+
+    #[test]
+    fn new_spec_normalizes_non_spec_extensions() {
+        let raw = crate::specs::config::Spec {
+            version: "0.6.0".to_string(),
+            kind: "vendor.com/device".to_string(),
+            devices: vec![one_device("d0")],
+            ..Default::default()
+        };
+        let spec = new_spec(&raw, &PathBuf::from("/tmp/spec.conf"), 0).unwrap();
+        assert!(spec.get_path().ends_with("spec.yaml"));
+    }
+
+    #[test]
+    fn spec_level_edits_apply_to_oci_spec() {
+        let raw = crate::specs::config::Spec {
+            version: "0.6.0".to_string(),
+            kind: "vendor.com/device".to_string(),
+            container_edits: Some(crate::specs::config::ContainerEdits {
+                env: Some(vec!["GLOBAL=1".to_string()]),
+                ..Default::default()
+            }),
+            devices: vec![one_device("d0")],
+            ..Default::default()
+        };
+        let mut spec = new_spec(&raw, &PathBuf::from("/tmp/x.yaml"), 0).unwrap();
+        let mut oci_spec = oci::Spec::default();
+        spec.apply_edits(&mut oci_spec).unwrap();
+        let env = oci_spec.process().as_ref().unwrap().env().as_ref().unwrap();
+        assert!(env.contains(&"GLOBAL=1".to_string()));
+    }
+
+    #[test]
+    fn parse_spec_requires_an_existing_path() {
+        let err = parse_spec(&PathBuf::from("/nonexistent/spec.yaml")).unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn validate_version_rejects_unknown_and_understated_versions() {
+        let mut raw = crate::specs::config::Spec {
+            version: "9.9.9".to_string(),
+            kind: "vendor.com/device".to_string(),
+            devices: vec![one_device("d0")],
+            ..Default::default()
+        };
+        let err = new_spec(&raw, &PathBuf::from("/tmp/x.yaml"), 0).unwrap_err();
+        assert!(format!("{err:?}").contains("invalid version"));
+
+        // additionalGIDs require 0.7.0: declaring 0.5.0 understates it
+        raw.version = "0.5.0".to_string();
+        raw.devices[0].container_edits.additional_gids = Some(vec![5]);
+        let err = new_spec(&raw, &PathBuf::from("/tmp/x.yaml"), 0).unwrap_err();
+        assert!(format!("{err:?}").contains("must be at least"));
     }
 }

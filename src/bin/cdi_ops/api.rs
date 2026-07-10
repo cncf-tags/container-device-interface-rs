@@ -71,3 +71,92 @@ fn cdi_print_device(idx: usize, dev: Device, verbose: bool, format: &str, level:
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cdi::cache::with_auto_refresh;
+    use cdi::default_cache::{configure, refresh};
+    use cdi::spec_dirs::with_spec_dirs;
+    use std::fs;
+
+    // One test: the default cache is a process-wide singleton shared by
+    // every test in this binary.
+    #[test]
+    fn list_and_inject_through_the_default_cache() {
+        // Empty spec dir first: the "No CDI devices found" early return.
+        let empty = tempfile::tempdir().unwrap();
+        configure(vec![
+            with_spec_dirs(&[empty.path().to_str().unwrap()]),
+            with_auto_refresh(false),
+        ])
+        .unwrap();
+        refresh().unwrap();
+        cdi_list_devices(false, " ").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("vendor.yaml"),
+            r#"cdiVersion: "0.6.0"
+kind: "vendor.com/device"
+containerEdits:
+  env:
+    - "GLOBAL=1"
+devices:
+  - name: "gpu0"
+    containerEdits:
+      env:
+        - "VENDOR=1"
+"#,
+        )
+        .unwrap();
+        configure(vec![
+            with_spec_dirs(&[dir.path().to_str().unwrap()]),
+            with_auto_refresh(false),
+        ])
+        .unwrap();
+        refresh().unwrap();
+
+        // Non-verbose and verbose (the latter prints the global spec edits).
+        cdi_list_devices(false, " ").unwrap();
+        cdi_list_devices(true, "json").unwrap();
+        cdi_list_devices(true, "").unwrap();
+
+        let mut oci_spec = oci::Spec::default();
+        cdi_inject_devices(
+            &mut oci_spec,
+            vec![
+                "vendor.com/device=gpu0".to_string(),
+                "vendor.com/device=unknown".to_string(), // filtered, not an error
+            ],
+            "yaml",
+        )
+        .unwrap();
+        let env = oci_spec.process().as_ref().unwrap().env().as_ref().unwrap();
+        assert!(env.contains(&"VENDOR=1".to_string()));
+        assert!(env.contains(&"GLOBAL=1".to_string()));
+
+        // A loadable spec whose device node cannot be stat'ed fails at
+        // inject time (fill_missing_info) - the error-print path.
+        fs::write(
+            dir.path().join("broken.yaml"),
+            r#"cdiVersion: "0.6.0"
+kind: "vendor2.com/device"
+devices:
+  - name: "bad0"
+    containerEdits:
+      deviceNodes:
+        - path: "/nonexistent/device/node"
+"#,
+        )
+        .unwrap();
+        refresh().unwrap();
+        let mut oci_spec = oci::Spec::default();
+        cdi_inject_devices(
+            &mut oci_spec,
+            vec!["vendor2.com/device=bad0".to_string()],
+            "yaml",
+        )
+        .unwrap();
+    }
+}

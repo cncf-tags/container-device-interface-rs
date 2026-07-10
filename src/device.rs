@@ -103,3 +103,72 @@ impl Device {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        spec::new_spec,
+        specs::config::{
+            ContainerEdits as CDIContainerEdits, Device as CDIDeviceSpec, Spec as CDISpec,
+        },
+    };
+    use std::path::PathBuf;
+
+    fn spec_with(device: CDIDeviceSpec) -> Spec {
+        let raw = CDISpec {
+            version: "0.6.0".to_string(),
+            kind: "vendor.com/class".to_string(),
+            devices: vec![device.clone()],
+            ..Default::default()
+        };
+        new_spec(&raw, &PathBuf::from("/tmp/spec.yaml"), 0).unwrap()
+    }
+
+    fn cdi_device(name: &str) -> CDIDeviceSpec {
+        CDIDeviceSpec {
+            name: name.to_string(),
+            container_edits: CDIContainerEdits {
+                env: Some(vec!["X=1".to_string()]),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn new_device_builds_and_applies_edits() {
+        let raw = cdi_device("gpu0");
+        let spec = spec_with(raw.clone());
+        let mut device = new_device(&spec, &raw).unwrap();
+
+        assert_eq!(device.get_qualified_name(), "vendor.com/class=gpu0");
+        assert_eq!(device.get_spec().get_vendor(), "vendor.com");
+
+        let mut oci_spec = oci::Spec::default();
+        device.apply_edits(&mut oci_spec).unwrap();
+        let env = oci_spec.process().as_ref().unwrap().env().as_ref().unwrap();
+        assert!(env.contains(&"X=1".to_string()));
+    }
+
+    #[test]
+    fn new_device_rejects_invalid_names_and_empty_edits() {
+        let bad_name = cdi_device("not a name");
+        let spec = spec_with(cdi_device("gpu0"));
+        let err = new_device(&spec, &bad_name).unwrap_err();
+        assert!(err.to_string().contains("validate device name failed"));
+
+        let empty_edits = CDIDeviceSpec {
+            name: "gpu1".to_string(),
+            ..Default::default()
+        };
+        let err = new_device(&spec, &empty_edits).unwrap_err();
+        assert!(err.to_string().contains("empty device edits"));
+    }
+
+    #[test]
+    fn default_device_is_constructible() {
+        let device = Device::default();
+        assert_eq!(device.cdi_device.name, "");
+    }
+}

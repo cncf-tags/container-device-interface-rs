@@ -288,7 +288,179 @@ impl Eq for OrderedMounts {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oci_spec::runtime::LinuxNetDevice;
+    use oci_spec::runtime::{LinuxNetDevice, Spec};
+
+    fn gen() -> Generator {
+        Generator::spec_gen(Some(Spec::default()))
+    }
+
+    #[test]
+    fn add_device_inserts_replaces_and_remove_deletes() {
+        let mut g = gen();
+        let mut dev = LinuxDevice::default();
+        dev.set_path(PathBuf::from("/dev/x"));
+        g.add_device(dev.clone());
+
+        // same path replaces instead of duplicating
+        let mut replacement = LinuxDevice::default();
+        replacement.set_path(PathBuf::from("/dev/x"));
+        replacement.set_major(7);
+        g.add_device(replacement);
+
+        let devices = |g: &Generator| {
+            g.config
+                .as_ref()
+                .unwrap()
+                .linux()
+                .as_ref()
+                .unwrap()
+                .devices()
+                .clone()
+                .unwrap_or_default()
+        };
+        assert_eq!(devices(&g).len(), 1);
+        assert_eq!(devices(&g)[0].major(), 7);
+
+        g.remove_device("/dev/x");
+        assert!(devices(&g).is_empty());
+        // removing an absent device is a no-op
+        g.remove_device("/dev/x");
+    }
+
+    #[test]
+    fn add_linux_resources_device_records_cgroup_entry() {
+        let mut g = gen();
+        g.add_linux_resources_device(
+            true,
+            LinuxDeviceType::C,
+            Some(1),
+            Some(3),
+            Some("rwm".to_string()),
+        );
+
+        let binding = g.config.unwrap();
+        let devices = binding
+            .linux()
+            .as_ref()
+            .unwrap()
+            .resources()
+            .as_ref()
+            .unwrap()
+            .devices()
+            .as_ref()
+            .unwrap();
+        assert_eq!(devices.len(), 1);
+        assert!(devices[0].allow());
+        assert_eq!(devices[0].typ(), Some(LinuxDeviceType::C));
+        assert_eq!(devices[0].major(), Some(1));
+        assert_eq!(devices[0].minor(), Some(3));
+        assert_eq!(devices[0].access().as_deref(), Some("rwm"));
+    }
+
+    #[test]
+    fn intel_rdt_set_and_clos_id_update() {
+        let mut g = gen();
+        let mut rdt = LinuxIntelRdt::default();
+        rdt.set_clos_id(Some("initial".to_string()));
+        g.set_linux_intel_rdt(rdt);
+        g.set_linux_intel_rdt_clos_id("updated".to_string());
+
+        let binding = g.config.unwrap();
+        let rdt = binding
+            .linux()
+            .as_ref()
+            .unwrap()
+            .intel_rdt()
+            .as_ref()
+            .unwrap();
+        assert_eq!(rdt.clos_id().as_deref(), Some("updated"));
+    }
+
+    #[test]
+    fn additional_gids_deduplicate() {
+        let mut g = gen();
+        g.add_process_additional_gid(1000);
+        g.add_process_additional_gid(1000);
+        g.add_process_additional_gid(2000);
+
+        let binding = g.config.unwrap();
+        let gids = binding
+            .process()
+            .as_ref()
+            .unwrap()
+            .user()
+            .additional_gids()
+            .clone()
+            .unwrap();
+        assert_eq!(gids, vec![1000, 2000]);
+    }
+
+    #[test]
+    fn env_updates_existing_keys_and_appends_new_ones() {
+        let mut g = gen();
+        g.add_multiple_process_env(&["A=1".to_string(), "B=2".to_string()]);
+        g.add_multiple_process_env(&["A=3".to_string(), "C=4".to_string()]);
+
+        let binding = g.config.unwrap();
+        let env = binding.process().as_ref().unwrap().env().clone().unwrap();
+        // Spec::default() seeds PATH/TERM; assert semantics, not the seed.
+        assert_eq!(env.iter().filter(|e| e.starts_with("A=")).count(), 1);
+        let tail = &env[env.len() - 3..];
+        assert_eq!(tail, ["A=3", "B=2", "C=4"]);
+    }
+
+    #[test]
+    fn hooks_initialize_then_append() {
+        let mut g = gen();
+        for _ in 0..2 {
+            g.add_prestart_hook(Hook::default());
+            g.add_poststart_hook(Hook::default());
+            g.add_poststop_hook(Hook::default());
+            g.add_createruntime_hook(Hook::default());
+            g.add_createcontainer_hook(Hook::default());
+            g.add_startcontainer_hook(Hook::default());
+        }
+
+        let binding = g.config.unwrap();
+        let hooks = binding.hooks().as_ref().unwrap();
+        assert_eq!(hooks.prestart().as_ref().unwrap().len(), 2);
+        assert_eq!(hooks.poststart().as_ref().unwrap().len(), 2);
+        assert_eq!(hooks.poststop().as_ref().unwrap().len(), 2);
+        assert_eq!(hooks.create_runtime().as_ref().unwrap().len(), 2);
+        assert_eq!(hooks.create_container().as_ref().unwrap().len(), 2);
+        assert_eq!(hooks.start_container().as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn mounts_add_sort_list_remove_clear() {
+        let mut g = gen();
+        let mount = |dest: &str| {
+            let mut m = Mount::default();
+            m.set_destination(PathBuf::from(dest));
+            m
+        };
+        g.add_mount(mount("/z"));
+        g.add_mount(mount("/a"));
+
+        g.sort_mounts();
+        let dests: Vec<_> = g
+            .list_mounts()
+            .unwrap()
+            .iter()
+            .map(|m| m.destination().clone())
+            .collect();
+        assert!(dests.windows(2).all(|w| w[0] <= w[1]));
+
+        g.remove_mount("/z");
+        assert!(!g
+            .list_mounts()
+            .unwrap()
+            .iter()
+            .any(|m| m.destination() == &PathBuf::from("/z")));
+
+        g.clear_mounts();
+        assert!(g.list_mounts().is_none());
+    }
 
     #[test]
     fn add_process_additional_gid_initializes_empty_gid_list() {
@@ -332,5 +504,74 @@ mod tests {
             net_devices.get("eth0").unwrap().name().as_ref().unwrap(),
             "container_eth0"
         );
+    }
+
+    // An all-None spec (unlike Spec::default(), which comes pre-populated)
+    // drives the create-the-layer arms of every add_/init_ helper.
+    fn empty_gen() -> Generator {
+        let mut bare = Spec::default();
+        bare.set_process(None)
+            .set_linux(None)
+            .set_hooks(None)
+            .set_mounts(None);
+        Generator::spec_gen(Some(bare))
+    }
+
+    #[test]
+    fn helpers_create_missing_layers_on_empty_specs() {
+        let mut g = empty_gen();
+        let mut dev = LinuxDevice::default();
+        dev.set_path(PathBuf::from("/dev/x"));
+        g.remove_device("/dev/x"); // no devices list yet: no-op arm
+        g.add_device(dev);
+        g.add_linux_resources_device(true, LinuxDeviceType::C, Some(1), Some(3), None);
+        let mut net_device = LinuxNetDevice::default();
+        net_device.set_name(Some("c".to_string()));
+        g.add_linux_net_device("eth0".to_string(), net_device);
+        g.set_linux_intel_rdt_clos_id("clos".to_string());
+        g.add_process_additional_gid(9);
+        g.add_multiple_process_env(&["K=V".to_string()]);
+        g.add_prestart_hook(Hook::default());
+        g.add_poststart_hook(Hook::default());
+        g.add_poststop_hook(Hook::default());
+        g.add_createruntime_hook(Hook::default());
+        g.add_createcontainer_hook(Hook::default());
+        g.add_startcontainer_hook(Hook::default());
+        g.add_mount(Mount::default());
+        g.sort_mounts();
+        g.clear_mounts();
+        assert!(g.list_mounts().is_none());
+
+        let binding = g.config.unwrap();
+        assert_eq!(
+            binding
+                .linux()
+                .as_ref()
+                .unwrap()
+                .devices()
+                .as_ref()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(binding.hooks().is_some());
+    }
+
+    #[test]
+    fn ordered_mounts_compare_by_depth_then_path() {
+        let mount = |dest: &str| {
+            let mut m = Mount::default();
+            m.set_destination(PathBuf::from(dest));
+            m
+        };
+        let shallow = OrderedMounts::new(vec![mount("/a")]);
+        let deep = OrderedMounts::new(vec![mount("/a/b")]);
+        let deep_b = OrderedMounts::new(vec![mount("/a/c")]);
+
+        assert!(shallow < deep);
+        assert!(deep < deep_b);
+        assert_eq!(deep.partial_cmp(&deep_b), Some(Ordering::Less));
+        assert_eq!(shallow.parts(0), 2);
+        assert!(shallow == OrderedMounts::new(vec![mount("/a")]));
     }
 }
