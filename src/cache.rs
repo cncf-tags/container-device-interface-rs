@@ -3,6 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
     error::Error,
     fmt,
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
@@ -14,6 +15,7 @@ use crate::{
     //watch::Watch,
     container_edits::ContainerEdits,
     device::Device,
+    resolved_edits::{CdiEditScope, ResolvedCdiEdits, ScopedContainerEdits},
     spec::Spec,
     spec_dirs::{convert_errors, scan_spec_dirs, with_spec_dirs, SpecError, DEFAULT_SPEC_DIRS},
 };
@@ -245,36 +247,51 @@ impl Cache {
         Ok(false)
     }
 
-    pub fn inject_devices(
+    fn collect_scoped_container_edits(
         &mut self,
-        oci_spec: Option<&mut oci::Spec>,
-        devices: Vec<String>,
-    ) -> Result<Vec<String>, Box<dyn Error + Send + Sync + 'static>> {
+        devices: &[String],
+        propagate_refresh_errors: bool,
+    ) -> Result<Vec<ScopedContainerEdits>, Box<dyn Error + Send + Sync + 'static>> {
         let mut unresolved = Vec::new();
 
-        let oci_spec = match oci_spec {
-            Some(spec) => spec,
-            None => return Err("can't inject devices, OCI Spec is empty".into()),
-        };
+        let refresh_result = self.refresh_if_required(false);
+        if propagate_refresh_errors {
+            refresh_result.map_err(|err| -> Box<dyn Error + Send + Sync + 'static> {
+                err.to_string().into()
+            })?;
+        }
 
-        let _ = self.refresh_if_required(false);
-
-        let edits = &mut ContainerEdits::new();
+        let mut scoped_edits = Vec::new();
         let mut specs: HashSet<Spec> = HashSet::new();
 
         for device in devices {
-            if let Some(dev) = self.devices.get(&device) {
+            if let Some(dev) = self.devices.get(device) {
                 let mut spec = dev.get_spec();
+                let spec_kind = spec.cdi_spec.kind.clone();
+                let spec_path = PathBuf::from(spec.get_path());
+
                 if specs.insert(spec.clone()) {
-                    // spec.edits may be none when we only have dev.edits
-                    // allow dev.edits to be added even if spec.edits is None
-                    if let Some(ce) = spec.edits() {
-                        edits.append(ce)?
+                    if let Some(edits) = spec.edits() {
+                        scoped_edits.push(ScopedContainerEdits {
+                            edits,
+                            scope: CdiEditScope::Spec {
+                                kind: spec_kind.clone(),
+                                path: spec_path.clone(),
+                            },
+                        });
                     }
                 }
-                edits.append(dev.edits())?;
+
+                scoped_edits.push(ScopedContainerEdits {
+                    edits: dev.edits(),
+                    scope: CdiEditScope::Device {
+                        qualified_name: device.clone(),
+                        spec_kind,
+                        spec_path,
+                    },
+                });
             } else {
-                unresolved.push(device);
+                unresolved.push(device.clone());
             }
         }
 
@@ -282,11 +299,44 @@ impl Cache {
             return Err(format!("unresolvable CDI devices {}", unresolved.join(", ")).into());
         }
 
+        Ok(scoped_edits)
+    }
+
+    pub fn inject_devices(
+        &mut self,
+        oci_spec: Option<&mut oci::Spec>,
+        devices: Vec<String>,
+    ) -> Result<Vec<String>, Box<dyn Error + Send + Sync + 'static>> {
+        let oci_spec = match oci_spec {
+            Some(spec) => spec,
+            None => return Err("can't inject devices, OCI Spec is empty".into()),
+        };
+
+        let scoped_edits = self.collect_scoped_container_edits(&devices, false)?;
+        let edits = &mut ContainerEdits::new();
+
+        for scoped in scoped_edits {
+            edits.append(scoped.edits)?;
+        }
+
         if let Err(err) = edits.apply(oci_spec) {
             return Err(format!("failed to inject devices: {}", err).into());
         }
 
         Ok(Vec::new())
+    }
+
+    pub fn resolve_edits(&mut self, devices: &[String]) -> Result<ResolvedCdiEdits> {
+        let scoped_edits = self
+            .collect_scoped_container_edits(devices, true)
+            .map_err(anyhow::Error::from_boxed)?;
+        let mut resolved = ResolvedCdiEdits::default();
+
+        for scoped in scoped_edits {
+            resolved.append_container_edits(&scoped.edits, scoped.scope)?;
+        }
+
+        Ok(resolved)
     }
 
     pub fn get_errors(&self) -> HashMap<String, Vec<anyhow::Error>> {
@@ -300,11 +350,13 @@ mod tests {
     use super::*;
     use crate::spec_dirs::with_spec_dirs;
     use crate::{
-        spec::new_spec,
+        spec::{new_spec, Spec as LoadedSpec},
         specs::config::{
-            ContainerEdits as CDIContainerEdits, Device as CDIDevice, DeviceNode, IntelRdt,
-            Spec as CDISpec,
+            ContainerEdits as CDIContainerEdits, Device as CDIDevice, DeviceNode, Hook, IntelRdt,
+            LinuxNetDevice, Mount, Spec as CDISpec,
         },
+        CdiEditScope, ResolvedCdiDeviceNode, ResolvedCdiMount, UnsupportedCdiEdit,
+        UnsupportedCdiEditKind,
     };
     use oci_spec::runtime::Spec as OCISpec;
     use std::{collections::HashMap, fs, path::PathBuf};
@@ -426,6 +478,194 @@ devices:
         assert!(err.to_string().contains("vendor.com/device=nope"));
     }
 
+    fn spec_path(index: usize) -> PathBuf {
+        PathBuf::from(format!("/tmp/cdi-resolved-edits-{index}.yaml"))
+    }
+
+    fn raw_spec(
+        kind: &str,
+        container_edits: Option<CDIContainerEdits>,
+        devices: Vec<CDIDevice>,
+    ) -> CDISpec {
+        CDISpec {
+            version: "1.1.0".to_string(),
+            kind: kind.to_string(),
+            container_edits,
+            devices,
+            ..Default::default()
+        }
+    }
+
+    fn raw_device(name: &str, container_edits: CDIContainerEdits) -> CDIDevice {
+        CDIDevice {
+            name: name.to_string(),
+            container_edits,
+            ..Default::default()
+        }
+    }
+
+    fn env_edits(values: &[&str]) -> CDIContainerEdits {
+        CDIContainerEdits {
+            env: Some(values.iter().map(|value| value.to_string()).collect()),
+            ..Default::default()
+        }
+    }
+
+    fn node_edits(
+        path: &str,
+        host_path: Option<&str>,
+        typ: Option<&str>,
+        major: Option<i64>,
+        minor: Option<i64>,
+    ) -> CDIContainerEdits {
+        CDIContainerEdits {
+            device_nodes: Some(vec![DeviceNode {
+                path: path.to_string(),
+                host_path: host_path.map(str::to_string),
+                r#type: typ.map(str::to_string),
+                major,
+                minor,
+                ..Default::default()
+            }]),
+            ..Default::default()
+        }
+    }
+
+    fn mount_edits() -> CDIContainerEdits {
+        CDIContainerEdits {
+            mounts: Some(vec![Mount {
+                host_path: "/host/data".to_string(),
+                container_path: "/container/data".to_string(),
+                r#type: Some("bind".to_string()),
+                options: Some(vec!["ro".to_string(), "rbind".to_string()]),
+            }]),
+            ..Default::default()
+        }
+    }
+
+    fn unsupported_edits() -> CDIContainerEdits {
+        CDIContainerEdits {
+            hooks: Some(vec![Hook {
+                hook_name: "prestart".to_string(),
+                path: "/bin/true".to_string(),
+                ..Default::default()
+            }]),
+            net_devices: Some(vec![LinuxNetDevice {
+                host_interface_name: "eth-test0".to_string(),
+                name: "eth0".to_string(),
+            }]),
+            intel_rdt: Some(IntelRdt {
+                clos_id: Some("class-a".to_string()),
+                ..Default::default()
+            }),
+            additional_gids: Some(vec![44, 45]),
+            ..Default::default()
+        }
+    }
+
+    fn cache_from_raw_specs(raw_specs: Vec<CDISpec>) -> Cache {
+        let mut specs: HashMap<String, Vec<LoadedSpec>> = HashMap::new();
+        let mut devices = HashMap::new();
+
+        for (index, raw) in raw_specs.iter().enumerate() {
+            let spec = new_spec(raw, &spec_path(index), 0).unwrap();
+            for device in spec.get_devices().values() {
+                devices.insert(device.get_qualified_name(), device.clone());
+            }
+            specs.entry(spec.get_vendor()).or_default().push(spec);
+        }
+
+        Cache::new(Vec::new(), specs, devices)
+    }
+
+    fn spec_scope(index: usize) -> CdiEditScope {
+        CdiEditScope::Spec {
+            kind: "vendor.com/device".to_string(),
+            path: spec_path(index),
+        }
+    }
+
+    fn device_scope(qualified_name: &str, index: usize) -> CdiEditScope {
+        CdiEditScope::Device {
+            qualified_name: qualified_name.to_string(),
+            spec_kind: "vendor.com/device".to_string(),
+            spec_path: spec_path(index),
+        }
+    }
+
+    #[test]
+    fn resolve_edits_propagates_refresh_errors() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp_dir.path().join("bad.yaml"),
+            r#"cdiVersion: "1.1.0"
+kind: "vendor.com/device"
+unknownTopLevel: true
+devices:
+  - name: "gpu0"
+    containerEdits:
+      deviceNodes:
+        - path: "/dev/null"
+"#,
+        )
+        .unwrap();
+        let mut cache = Cache::new(
+            vec![temp_dir.path().display().to_string()],
+            HashMap::new(),
+            HashMap::new(),
+        );
+        cache.auto_refresh = true;
+
+        assert!(cache.resolve_edits(&[]).is_err());
+    }
+
+    #[test]
+    fn inject_devices_ignores_auto_refresh_errors_and_uses_existing_cache() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp_dir.path().join("bad.yaml"),
+            r#"cdiVersion: "1.1.0"
+kind: "vendor.com/device"
+unknownTopLevel: true
+devices:
+  - name: "other"
+    containerEdits:
+      deviceNodes:
+        - path: "/dev/null"
+"#,
+        )
+        .unwrap();
+
+        let raw = raw_spec(
+            "vendor.com/device",
+            None,
+            vec![raw_device(
+                "gpu0",
+                node_edits("/dev/null", None, Some("c"), Some(1), Some(3)),
+            )],
+        );
+        let mut cache = cache_from_raw_specs(vec![raw]);
+        cache.spec_dirs = vec![temp_dir.path().display().to_string()];
+        cache.auto_refresh = true;
+        let mut oci_spec = OCISpec::default();
+
+        cache
+            .inject_devices(
+                Some(&mut oci_spec),
+                vec!["vendor.com/device=gpu0".to_string()],
+            )
+            .unwrap();
+
+        let devices = oci_spec
+            .linux()
+            .as_ref()
+            .unwrap()
+            .devices()
+            .as_ref()
+            .unwrap();
+        assert_eq!(PathBuf::from("/dev/null"), devices[0].path().clone());
+    }
+
     #[test]
     fn inject_devices_preserves_spec_level_intel_rdt_with_device_edits() {
         let raw = CDISpec {
@@ -479,5 +719,446 @@ devices:
             Some(&"global-class".to_string()),
             intel_rdt.clos_id().as_ref()
         );
+    }
+
+    #[test]
+    fn resolve_edits_preserves_host_path_when_it_differs_from_container_path() {
+        let raw = raw_spec(
+            "vendor.com/device",
+            None,
+            vec![raw_device(
+                "gpu0",
+                node_edits(
+                    "/dev/codex0",
+                    Some("/dev/null"),
+                    Some("c"),
+                    Some(1),
+                    Some(3),
+                ),
+            )],
+        );
+        let mut cache = cache_from_raw_specs(vec![raw]);
+
+        let edits = cache
+            .resolve_edits(&["vendor.com/device=gpu0".to_string()])
+            .unwrap();
+
+        assert_eq!(
+            vec![ResolvedCdiDeviceNode {
+                host_path: PathBuf::from("/dev/null"),
+                container_path: PathBuf::from("/dev/codex0"),
+                typ: Some("c".to_string()),
+                major: Some(1),
+                minor: Some(3),
+                file_mode: None,
+                permissions: None,
+                uid: None,
+                gid: None,
+                scope: device_scope("vendor.com/device=gpu0", 0),
+            }],
+            edits.device_nodes
+        );
+    }
+
+    #[test]
+    fn resolve_edits_defaults_missing_host_path_to_container_path() {
+        let raw = raw_spec(
+            "vendor.com/device",
+            None,
+            vec![raw_device(
+                "gpu0",
+                node_edits("/dev/null", None, Some("c"), Some(1), Some(3)),
+            )],
+        );
+        let mut cache = cache_from_raw_specs(vec![raw]);
+
+        let edits = cache
+            .resolve_edits(&["vendor.com/device=gpu0".to_string()])
+            .unwrap();
+
+        assert_eq!(PathBuf::from("/dev/null"), edits.device_nodes[0].host_path);
+        assert_eq!(
+            PathBuf::from("/dev/null"),
+            edits.device_nodes[0].container_path
+        );
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "miri's stat shim does not populate rdev; /dev/null major/minor read as 0"
+    )]
+    fn resolve_edits_treats_empty_device_type_as_missing() {
+        let raw = raw_spec(
+            "vendor.com/device",
+            None,
+            vec![raw_device(
+                "gpu0",
+                node_edits("/dev/null", None, Some(""), None, None),
+            )],
+        );
+        let mut cache = cache_from_raw_specs(vec![raw]);
+
+        let edits = cache
+            .resolve_edits(&["vendor.com/device=gpu0".to_string()])
+            .unwrap();
+
+        assert_eq!(Some("c"), edits.device_nodes[0].typ.as_deref());
+        assert_eq!(Some(1), edits.device_nodes[0].major);
+        assert_eq!(Some(3), edits.device_nodes[0].minor);
+    }
+
+    #[test]
+    fn resolve_edits_preserves_mount_fields() {
+        let raw = raw_spec(
+            "vendor.com/device",
+            None,
+            vec![raw_device("gpu0", mount_edits())],
+        );
+        let mut cache = cache_from_raw_specs(vec![raw]);
+
+        let edits = cache
+            .resolve_edits(&["vendor.com/device=gpu0".to_string()])
+            .unwrap();
+
+        assert_eq!(
+            vec![ResolvedCdiMount {
+                host_path: PathBuf::from("/host/data"),
+                container_path: PathBuf::from("/container/data"),
+                typ: Some("bind".to_string()),
+                options: vec!["ro".to_string(), "rbind".to_string()],
+                scope: device_scope("vendor.com/device=gpu0", 0),
+            }],
+            edits.mounts
+        );
+    }
+
+    #[test]
+    fn resolve_edits_applies_spec_level_edits_once_for_two_devices_from_same_spec() {
+        let raw = raw_spec(
+            "vendor.com/device",
+            Some(env_edits(&["SPEC=1"])),
+            vec![
+                raw_device("gpu0", env_edits(&["DEV=0"])),
+                raw_device("gpu1", env_edits(&["DEV=1"])),
+            ],
+        );
+        let mut cache = cache_from_raw_specs(vec![raw]);
+
+        let edits = cache
+            .resolve_edits(&[
+                "vendor.com/device=gpu0".to_string(),
+                "vendor.com/device=gpu1".to_string(),
+            ])
+            .unwrap();
+
+        assert_eq!(
+            1,
+            edits
+                .env
+                .iter()
+                .filter(|value| value.as_str() == "SPEC=1")
+                .count()
+        );
+    }
+
+    #[test]
+    fn resolve_edits_applies_spec_edits_before_first_device_edits() {
+        let raw = raw_spec(
+            "vendor.com/device",
+            Some(env_edits(&["SPEC=1"])),
+            vec![
+                raw_device("gpu0", env_edits(&["DEV=0"])),
+                raw_device("gpu1", env_edits(&["DEV=1"])),
+            ],
+        );
+        let mut cache = cache_from_raw_specs(vec![raw]);
+
+        let edits = cache
+            .resolve_edits(&[
+                "vendor.com/device=gpu0".to_string(),
+                "vendor.com/device=gpu1".to_string(),
+            ])
+            .unwrap();
+
+        assert_eq!(
+            vec![
+                "SPEC=1".to_string(),
+                "DEV=0".to_string(),
+                "DEV=1".to_string()
+            ],
+            edits.env
+        );
+    }
+
+    #[test]
+    fn resolve_edits_reports_spec_level_unsupported_edits() {
+        let raw = raw_spec(
+            "vendor.com/device",
+            Some(unsupported_edits()),
+            vec![raw_device("gpu0", env_edits(&["DEV=0"]))],
+        );
+        let mut cache = cache_from_raw_specs(vec![raw]);
+        let scope = spec_scope(0);
+
+        let edits = cache
+            .resolve_edits(&["vendor.com/device=gpu0".to_string()])
+            .unwrap();
+
+        assert_eq!(
+            vec![
+                UnsupportedCdiEdit {
+                    kind: UnsupportedCdiEditKind::Hooks,
+                    count: 1,
+                    scope: scope.clone(),
+                },
+                UnsupportedCdiEdit {
+                    kind: UnsupportedCdiEditKind::NetDevices,
+                    count: 1,
+                    scope: scope.clone(),
+                },
+                UnsupportedCdiEdit {
+                    kind: UnsupportedCdiEditKind::IntelRdt,
+                    count: 1,
+                    scope: scope.clone(),
+                },
+                UnsupportedCdiEdit {
+                    kind: UnsupportedCdiEditKind::AdditionalGids,
+                    count: 2,
+                    scope,
+                },
+            ],
+            edits.unsupported
+        );
+    }
+
+    #[test]
+    fn resolve_edits_reports_device_level_unsupported_edits() {
+        let raw = raw_spec(
+            "vendor.com/device",
+            None,
+            vec![raw_device("gpu0", unsupported_edits())],
+        );
+        let mut cache = cache_from_raw_specs(vec![raw]);
+        let scope = device_scope("vendor.com/device=gpu0", 0);
+
+        let edits = cache
+            .resolve_edits(&["vendor.com/device=gpu0".to_string()])
+            .unwrap();
+
+        assert_eq!(
+            vec![
+                UnsupportedCdiEdit {
+                    kind: UnsupportedCdiEditKind::Hooks,
+                    count: 1,
+                    scope: scope.clone(),
+                },
+                UnsupportedCdiEdit {
+                    kind: UnsupportedCdiEditKind::NetDevices,
+                    count: 1,
+                    scope: scope.clone(),
+                },
+                UnsupportedCdiEdit {
+                    kind: UnsupportedCdiEditKind::IntelRdt,
+                    count: 1,
+                    scope: scope.clone(),
+                },
+                UnsupportedCdiEdit {
+                    kind: UnsupportedCdiEditKind::AdditionalGids,
+                    count: 2,
+                    scope,
+                },
+            ],
+            edits.unsupported
+        );
+    }
+
+    #[test]
+    fn resolve_edits_errors_when_requested_device_is_absent() {
+        let mut cache = Cache::new(Vec::new(), HashMap::new(), HashMap::new());
+
+        let err = cache
+            .resolve_edits(&["vendor.com/device=missing".to_string()])
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("unresolvable CDI devices vendor.com/device=missing"),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_edits_errors_when_fully_specified_host_path_is_missing() {
+        let raw = raw_spec(
+            "vendor.com/device",
+            None,
+            vec![raw_device(
+                "gpu0",
+                node_edits(
+                    "/container/missing",
+                    Some("/definitely/not/a/cdi/device"),
+                    Some("c"),
+                    Some(1),
+                    Some(3),
+                ),
+            )],
+        );
+        let mut cache = cache_from_raw_specs(vec![raw]);
+
+        let err = cache
+            .resolve_edits(&["vendor.com/device=gpu0".to_string()])
+            .unwrap_err();
+        let err = format!("{err:?}");
+
+        assert!(
+            err.contains("failed to inspect CDI device node host path")
+                || err.contains("/definitely/not/a/cdi/device"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn resolve_edits_errors_when_fully_specified_host_path_type_mismatches() {
+        let raw = raw_spec(
+            "vendor.com/device",
+            None,
+            vec![raw_device(
+                "gpu0",
+                node_edits(
+                    "/container/null",
+                    Some("/dev/null"),
+                    Some("b"),
+                    Some(1),
+                    Some(3),
+                ),
+            )],
+        );
+        let mut cache = cache_from_raw_specs(vec![raw]);
+
+        let err = cache
+            .resolve_edits(&["vendor.com/device=gpu0".to_string()])
+            .unwrap_err();
+        let err = format!("{err:?}");
+
+        assert!(err.contains("host type mismatch"), "{err}");
+    }
+
+    #[test]
+    fn resolve_edits_accepts_unbuffered_char_type_for_char_host_path() {
+        let raw = raw_spec(
+            "vendor.com/device",
+            None,
+            vec![raw_device(
+                "gpu0",
+                node_edits(
+                    "/container/null",
+                    Some("/dev/null"),
+                    Some("u"),
+                    Some(1),
+                    Some(3),
+                ),
+            )],
+        );
+        let mut cache = cache_from_raw_specs(vec![raw]);
+
+        let edits = cache
+            .resolve_edits(&["vendor.com/device=gpu0".to_string()])
+            .unwrap();
+
+        assert_eq!(Some("u"), edits.device_nodes[0].typ.as_deref());
+        assert_eq!(Some(1), edits.device_nodes[0].major);
+        assert_eq!(Some(3), edits.device_nodes[0].minor);
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "miri's stat shim does not populate rdev; /dev/null major/minor read as 0"
+    )]
+    fn resolve_edits_fills_unbuffered_char_metadata_from_char_host_path() {
+        let raw = raw_spec(
+            "vendor.com/device",
+            None,
+            vec![raw_device(
+                "gpu0",
+                node_edits("/container/null", Some("/dev/null"), Some("u"), None, None),
+            )],
+        );
+        let mut cache = cache_from_raw_specs(vec![raw]);
+
+        let edits = cache
+            .resolve_edits(&["vendor.com/device=gpu0".to_string()])
+            .unwrap();
+
+        assert_eq!(Some("u"), edits.device_nodes[0].typ.as_deref());
+        assert_eq!(Some(1), edits.device_nodes[0].major);
+        assert_eq!(Some(3), edits.device_nodes[0].minor);
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "miri's stat shim does not populate rdev; /dev/null major/minor read as 0"
+    )]
+    fn resolve_edits_fills_missing_device_metadata_from_host_path() {
+        let raw = raw_spec(
+            "vendor.com/device",
+            None,
+            vec![raw_device(
+                "gpu0",
+                node_edits("/container/null", Some("/dev/null"), None, None, None),
+            )],
+        );
+        let mut cache = cache_from_raw_specs(vec![raw]);
+
+        let edits = cache
+            .resolve_edits(&["vendor.com/device=gpu0".to_string()])
+            .unwrap();
+
+        assert_eq!(
+            vec![ResolvedCdiDeviceNode {
+                host_path: PathBuf::from("/dev/null"),
+                container_path: PathBuf::from("/container/null"),
+                typ: Some("c".to_string()),
+                major: Some(1),
+                minor: Some(3),
+                file_mode: None,
+                permissions: None,
+                uid: None,
+                gid: None,
+                scope: device_scope("vendor.com/device=gpu0", 0),
+            }],
+            edits.device_nodes
+        );
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "miri's stat shim does not populate rdev; /dev/null major/minor read as 0"
+    )]
+    fn resolve_edits_fills_missing_minor_when_major_is_present() {
+        let raw = raw_spec(
+            "vendor.com/device",
+            None,
+            vec![raw_device(
+                "gpu0",
+                node_edits(
+                    "/container/null",
+                    Some("/dev/null"),
+                    Some("c"),
+                    Some(1),
+                    None,
+                ),
+            )],
+        );
+        let mut cache = cache_from_raw_specs(vec![raw]);
+
+        let edits = cache
+            .resolve_edits(&["vendor.com/device=gpu0".to_string()])
+            .unwrap();
+
+        assert_eq!(Some(3), edits.device_nodes[0].minor);
     }
 }
