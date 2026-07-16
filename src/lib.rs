@@ -7,6 +7,7 @@ pub mod device;
 pub mod generate;
 pub mod internal;
 pub mod parser;
+#[cfg(feature = "schema-validation")]
 pub mod schema;
 pub mod spec;
 pub mod spec_dirs;
