@@ -73,7 +73,7 @@ jobs:
         run: |
           cargo llvm-cov --locked --all-features --workspace --no-report
           sudo -E env "PATH=$PATH" cargo llvm-cov --locked --all-features --workspace --no-report
-          sudo -E env "PATH=$PATH" cargo llvm-cov report --lcov --output-path lcov.info
+          sudo -E env "PATH=$PATH" cargo llvm-cov report --locked --lcov --output-path lcov.info
 
       - name: Upload coverage to Coveralls
         uses: coverallsapp/github-action@648a8eb78e6d50909eff900e4ec85cab4524a45b # v2.3.6
@@ -88,4 +88,4 @@ jobs:
       # bound stops an aggregate score from masking under-tested modules
       # (baseline ~98% total, worst file ~95.5%).
       - name: Enforce minimum 95% total and per-file line coverage
-        run: sudo -E env "PATH=$PATH" cargo llvm-cov report --fail-under-lines 95 --fail-under-file-lines 95
+        run: sudo -E env "PATH=$PATH" cargo llvm-cov report --locked --fail-under-lines 95 --fail-under-file-lines 95

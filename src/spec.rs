@@ -133,10 +133,17 @@ pub fn parse_spec(path: &PathBuf) -> Result<CDISpec> {
     Ok(cdi_spec)
 }
 
-// validate_spec validates the Spec using the extneral validator.
+// validate_spec validates the Spec against the JSON schema; a no-op
+// without the schema-validation feature.
 pub fn validate_spec(raw_spec: &CDISpec) -> Result<()> {
-    let data = serde_yaml::to_string(raw_spec).context("marshal CDI spec for schema validation")?;
-    crate::schema::validate_builtin(data.as_bytes()).context("invalid CDI Spec schema")?;
+    #[cfg(feature = "schema-validation")]
+    {
+        let data =
+            serde_yaml::to_string(raw_spec).context("marshal CDI spec for schema validation")?;
+        crate::schema::validate_builtin(data.as_bytes()).context("invalid CDI Spec schema")?;
+    }
+    #[cfg(not(feature = "schema-validation"))]
+    let _ = raw_spec;
     Ok(())
 }
 

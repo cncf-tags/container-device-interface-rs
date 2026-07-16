@@ -32,5 +32,6 @@ rustc_commit="$(rustc -vV | sed -n 's/^commit-hash: //p')"
 # An empty hash would remap onto /rustc/ and produce unmatchable bytes.
 [ -n "$rustc_commit" ] || { echo "$0: cannot parse commit-hash from rustc -vV" >&2; exit 1; }
 
-exec cargo build --release --locked --target "$target" --config \
+# --features cli: the cdi/validate bins are feature-gated for lib consumers
+exec cargo build --release --locked --features cli --target "$target" --config \
   "target.\"$target\".rustflags=[\"--remap-path-prefix=$cargo_home=/cargo\",\"--remap-path-prefix=$sysroot/lib/rustlib/src/rust=/rustc/$rustc_commit\"]"

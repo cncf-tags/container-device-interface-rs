@@ -1,6 +1,6 @@
 [package]
 name = "container-device-interface"
-version = "1.1.1"
+version = "1.2.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "CDI (Container Device Interface), is a specification, for container-runtimes, to support third-party devices."
@@ -12,25 +12,36 @@ keywords = ["container"]
 rust-version = "1.86.0"
 
 [lib]
+# cdylib stays: the release tarball ships libcontainer_device_interface.so
 crate-type = ["cdylib", "rlib"]
 
-[[bin]]
-name = "cdi" # Name of the binary executable
-path = "src/bin/cdi.rs" # Path to the source file
+[features]
+default = ["schema-validation"]
+# Enable the CLI binaries (cdi, validate); pulls in clap.
+cli = ["dep:clap"]
+# Enable JSON schema validation via jsonschema; pulled in by default.
+schema-validation = ["dep:jsonschema"]
 
 [[bin]]
-name = "validate" # Name of the binary executable
-path = "src/bin/validate.rs" # Path to the source file
+name = "cdi"
+path = "src/bin/cdi.rs"
+required-features = ["cli"]
 
+[[bin]]
+name = "validate"
+path = "src/bin/validate.rs"
+required-features = ["cli", "schema-validation"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 oci-spec = { version = "0.10.0", features = ["runtime"] }
 anyhow = "1.0"
-clap = { version = "4.6.1", features = ["derive"] }
+clap = { version = "4.6.1", features = ["derive"], optional = true }
 serde_json = "1.0"
-jsonschema = "0.46.5"
+# default-features = false drops the reqwest/TLS remote-$ref resolver; all
+# $refs in the embedded schema are local after rewrite_defs_json_refs rewrites them.
+jsonschema = { version = "0.46.5", default-features = false, optional = true }
 once_cell = "1.21.4"
 serde = { version = "1.0.228", features = ["derive"] }
 libc = "0.2.186"
