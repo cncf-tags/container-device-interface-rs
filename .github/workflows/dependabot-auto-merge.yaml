@@ -1,0 +1,65 @@
+name: Auto-merge Dependabot PRs
+
+# Enables auto-merge on eligible Dependabot PRs so GitHub merges them
+# automatically once all required branch-protection checks pass. The actual
+# merge decision stays with GitHub's branch-protection engine - this workflow
+# only flips the flag; it cannot bypass any required check.
+#
+# Policy (inverse of NVRC): the kata-agent build pins the crates it shares
+# with this library, so a crate bump here can force a matching bump there.
+#   - github-actions updates: auto-merge. CI-only, never reach consumers.
+#   - cargo dev-dependencies: auto-merge. Not part of the shipped library,
+#     so they cannot reach the kata-agent build by construction.
+#   - cargo production dependencies: manual review against the kata tree.
+#
+# Security notes:
+#   - pull_request_target runs the BASE branch's workflow file, never PR code.
+#   - The author check uses pull_request.user.login (set by GitHub internally),
+#     not github.actor, which is spoofable via "@dependabot rebase" comments.
+#   - contents:write is scoped to GITHUB_TOKEN (this repo only) and is used
+#     solely to call enablePullRequestAutoMerge via `gh pr merge --auto`.
+#   - No merge happens here; GitHub enforces all required checks first.
+#
+# Pre-requisites: "Allow auto-merge" must be enabled in Settings → General,
+# and main must carry required status checks - without them auto-merge
+# completes immediately instead of waiting for CI.
+on:
+  pull_request_target: # zizmor: ignore[dangerous-triggers]
+    types:
+      - opened
+      - reopened
+      # Re-enable after each rebase: GitHub clears auto-merge on force-push.
+      - synchronize
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
+    steps:
+      # Reads the dependabot commit metadata via the API; classifies the
+      # update (ecosystem, dependency-type) without executing PR code.
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enable auto-merge
+        # direct:development = [dev-dependencies]; anything a consumer links
+        # (direct:production or indirect) waits for a human.
+        if: |
+          steps.metadata.outputs.package-ecosystem == 'github_actions' ||
+          (steps.metadata.outputs.package-ecosystem == 'cargo' &&
+           steps.metadata.outputs.dependency-type == 'direct:development')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"
