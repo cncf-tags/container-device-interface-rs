@@ -1,9 +1,10 @@
-name: Auto-merge Dependabot PRs
+name: Dependabot automation
 
-# Enables auto-merge on eligible Dependabot PRs so GitHub merges them
-# automatically once all required branch-protection checks pass. The actual
-# merge decision stays with GitHub's branch-protection engine - this workflow
-# only flips the flag; it cannot bypass any required check.
+# Adds ok-to-test and (for eligible PRs) enables auto-merge in one workflow.
+# Previously two separate pull_request_target workflows raced on the same event;
+# ci-on-push.yaml still recovers via the pull_request:labeled re-trigger when
+# the label arrives after the opened event, but consolidating here ensures the
+# label job and auto-merge job share one concurrency slot and one workflow run.
 #
 # Policy (inverse of NVRC): the kata-agent build pins the crates it shares
 # with this library, so a crate bump here can force a matching bump there.
@@ -31,18 +32,36 @@ on:
       # Re-enable after each rebase: GitHub clears auto-merge on force-push.
       - synchronize
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 concurrency:
-  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  group: dependabot-automation-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
+  label:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
+    permissions:
+      issues: write # labels ride the Issues API even on PRs
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              labels: ['ok-to-test'],
+            });
+            core.info('Added ok-to-test: dependabot updates are pre-approved for E2E.');
+
   auto-merge:
     runs-on: ubuntu-latest
     if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       # Reads the dependabot commit metadata via the API; classifies the
       # update (ecosystem, dependency-type) without executing PR code.
