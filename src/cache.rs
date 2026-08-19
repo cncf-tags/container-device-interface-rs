@@ -212,7 +212,7 @@ impl Cache {
         }
 
         for conflict in conflicts.iter() {
-            self.devices.remove(conflict);
+            devices.remove(conflict);
         }
 
         self.specs = specs;
@@ -406,6 +406,7 @@ devices:
 
         assert!(err.to_string().contains("conflicting device"));
         assert!(!cache.errors.is_empty());
+        assert!(cache.get_device("vendor.com/device=gpu0").is_none());
     }
 
     #[test]
