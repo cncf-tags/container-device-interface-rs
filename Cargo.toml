@@ -40,6 +40,7 @@ serde_yaml = "0.9.34"
 semver = "1.0.28"
 regex = "1.12.3"
 const_format = "0.2.36"
+h2 = "0.4.19"  # pin minimum version to fix RUSTSEC-2026-0258
 
 [dev-dependencies]
 nix = "0.31.3"

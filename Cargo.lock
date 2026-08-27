@@ -290,6 +290,7 @@ dependencies = [
  "anyhow",
  "clap",
  "const_format",
+ "h2",
  "jsonschema",
  "lazy_static",
  "libc",
