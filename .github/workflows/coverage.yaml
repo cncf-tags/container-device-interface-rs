@@ -62,7 +62,7 @@ jobs:
       # cargo-llvm-cov uses LLVM's native instrumentation for accurate coverage.
       # Pinned >= 0.8 for --fail-under-lines support on the report subcommand.
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@7623a79cdfecb99d681017af368ca353d9f49bb5 # v2.87.19
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-llvm-cov@0.8.7
 
