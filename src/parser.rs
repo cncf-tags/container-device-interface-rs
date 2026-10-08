@@ -17,29 +17,58 @@ pub(crate) fn qualified_name(vendor: &str, class: &str, name: &str) -> String {
     format!("{}/{}={}", vendor, class, name)
 }
 
-// IsQualifiedName tests if a device name is qualified.
-#[allow(dead_code)]
-pub(crate) fn is_qualified_name(name: &str) -> bool {
-    match parse_qualified_name(name) {
-        Ok(_) => {
-            println!("{} is a qualified name", name);
-            true
-        }
-        Err(e) => {
-            println!("{} is not a qualified name, {}", name, e);
-            false
-        }
-    }
+/// Returns whether `name` is a syntactically valid CDI qualified device name.
+///
+/// The syntax is `<vendor>/<class>=<device>`. Vendor and class names must start
+/// with an ASCII letter and end with an ASCII letter or digit. Device names
+/// must start and end with an ASCII letter or digit. Interior characters may
+/// be ASCII letters, digits, `_`, `-`, or `.`; device names also allow `:`.
+/// Single ASCII letters are valid components, and single digits are valid
+/// device names.
+///
+/// This function emits no output and checks syntax only, without checking
+/// whether the device exists. The input is neither trimmed nor normalized.
+/// Host paths, malformed names, non-ASCII characters, and comma-separated
+/// lists are rejected.
+/// Use [`parse_qualified_name`] to obtain the components or a validation error.
+///
+/// ```
+/// use container_device_interface::parser::is_qualified_name;
+///
+/// assert!(is_qualified_name("example.com/accelerator=device0"));
+/// assert!(is_qualified_name("nvidia.com/gpu=0:1"));
+/// assert!(!is_qualified_name("/dev/nvidia0"));
+/// assert!(!is_qualified_name("example.com/accelerator="));
+/// ```
+pub fn is_qualified_name(name: &str) -> bool {
+    parse_qualified_name(name).is_ok()
 }
 
-// ParseQualifiedName splits a qualified name into device vendor, class,
-// and name. If the device fails to parse as a qualified name, or if any
-// of the split components fail to pass syntax validation, vendor and
-// class are returned as empty, together with the verbatim input as the
-// name and an error describing the reason for failure.
-pub(crate) fn parse_qualified_name(
-    device: &str,
-) -> Result<(String, String, String), anyhow::Error> {
+/// Parses a CDI qualified device name into owned `(vendor, class, name)` strings.
+///
+/// The input must satisfy the ASCII grammar documented by [`is_qualified_name`].
+/// Components are returned verbatim, without trimming or normalization. This
+/// function checks syntax only; it does not check whether the device exists.
+///
+/// # Errors
+///
+/// Returns an error describing a missing or invalid component if the input is
+/// not a valid qualified name. No components are returned on failure. Host
+/// paths, extra `/` or `=` separators, whitespace, non-ASCII characters, and
+/// comma-separated lists are rejected.
+///
+/// ```
+/// use container_device_interface::parser::parse_qualified_name;
+///
+/// let (vendor, class, name) = parse_qualified_name("example.com/accelerator=card0")?;
+/// assert_eq!((vendor.as_str(), class.as_str(), name.as_str()),
+///            ("example.com", "accelerator", "card0"));
+/// let (_, _, mig_name) = parse_qualified_name("nvidia.com/gpu=0:1")?;
+/// assert_eq!(mig_name, "0:1");
+/// assert!(parse_qualified_name("/dev/nvidia0").is_err());
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+pub fn parse_qualified_name(device: &str) -> Result<(String, String, String), anyhow::Error> {
     let (vendor, class, name) = parse_device(device);
     if vendor.is_empty() {
         return Err(anyhow!("unqualified device {}, missing vendor", device));
