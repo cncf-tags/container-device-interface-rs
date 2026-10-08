@@ -17,29 +17,59 @@ pub(crate) fn qualified_name(vendor: &str, class: &str, name: &str) -> String {
     format!("{}/{}={}", vendor, class, name)
 }
 
-// IsQualifiedName tests if a device name is qualified.
-#[allow(dead_code)]
-pub(crate) fn is_qualified_name(name: &str) -> bool {
-    match parse_qualified_name(name) {
-        Ok(_) => {
-            println!("{} is a qualified name", name);
-            true
-        }
-        Err(e) => {
-            println!("{} is not a qualified name, {}", name, e);
-            false
-        }
-    }
+/// Returns whether `name` is a syntactically valid CDI qualified device name.
+///
+/// The syntax is `<vendor>/<class>=<device>`. Vendor and class names must start
+/// with an ASCII letter and end with an ASCII letter or digit. Device names
+/// must start and end with an ASCII letter or digit. Interior characters may
+/// be ASCII letters, digits, `_`, `-`, or `.`; device names also allow `:`.
+/// Single ASCII letters are valid components, and single digits are valid
+/// device names.
+///
+/// This function checks syntax only, without checking whether the device
+/// exists. The input is neither trimmed nor normalized.
+/// Host paths, malformed names, non-ASCII characters, and comma-separated
+/// lists are rejected.
+/// Use [`parse_qualified_name`] to obtain the components or a validation error.
+///
+/// ```
+/// use container_device_interface::parser::is_qualified_name;
+///
+/// assert!(is_qualified_name("example.com/accelerator=device0"));
+/// assert!(is_qualified_name("nvidia.com/gpu=0:1"));
+/// assert!(!is_qualified_name("/dev/nvidia0"));
+/// assert!(!is_qualified_name("example.com/accelerator="));
+/// ```
+pub fn is_qualified_name(name: &str) -> bool {
+    parse_qualified_name(name).is_ok()
 }
 
-// ParseQualifiedName splits a qualified name into device vendor, class,
-// and name. If the device fails to parse as a qualified name, or if any
-// of the split components fail to pass syntax validation, vendor and
-// class are returned as empty, together with the verbatim input as the
-// name and an error describing the reason for failure.
-pub(crate) fn parse_qualified_name(
-    device: &str,
-) -> Result<(String, String, String), anyhow::Error> {
+/// Parses a CDI qualified device name into borrowed `(vendor, class, name)` slices.
+///
+/// The input must satisfy the ASCII grammar documented by [`is_qualified_name`].
+/// Components borrow from the input and are returned verbatim, without trimming
+/// or normalization. Successful parsing allocates no strings. This function
+/// checks syntax only; it does not check whether the device exists.
+///
+/// # Errors
+///
+/// Returns an error describing a missing or invalid component if the input is
+/// not a valid qualified name. No components are returned on failure. Host
+/// paths, extra `/` or `=` separators, whitespace, non-ASCII characters, and
+/// comma-separated lists are rejected.
+///
+/// ```
+/// use container_device_interface::parser::parse_qualified_name;
+///
+/// let (vendor, class, name) = parse_qualified_name("example.com/accelerator=card0")?;
+/// assert_eq!((vendor, class, name),
+///            ("example.com", "accelerator", "card0"));
+/// let (_, _, mig_name) = parse_qualified_name("nvidia.com/gpu=0:1")?;
+/// assert_eq!(mig_name, "0:1");
+/// assert!(parse_qualified_name("/dev/nvidia0").is_err());
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+pub fn parse_qualified_name(device: &str) -> Result<(&str, &str, &str)> {
     let (vendor, class, name) = parse_device(device);
     if vendor.is_empty() {
         return Err(anyhow!("unqualified device {}, missing vendor", device));
@@ -51,33 +81,32 @@ pub(crate) fn parse_qualified_name(
         return Err(anyhow!("unqualified device {}, missing name", device));
     }
     if let Err(e) = validate_vendor_name(vendor) {
-        return Err(anyhow!("invalid vendor {}: {}", device, e));
+        return Err(anyhow!("invalid device {}: {}", device, e));
     }
     if let Err(e) = validate_class_name(class) {
-        return Err(anyhow!("invalid class {}: {}", device, e));
+        return Err(anyhow!("invalid device {}: {}", device, e));
     }
     if let Err(e) = validate_device_name(name) {
         return Err(anyhow!("invalid device {}: {}", device, e));
     }
-    Ok((vendor.to_string(), class.to_string(), name.to_string()))
+    Ok((vendor, class, name))
 }
 
 // ParseDevice tries to split a device name into vendor, class, and name.
 // If this fails, for instance in the case of unqualified device names,
 // ParseDevice returns an empty vendor and class together with name set
 // to the verbatim input.
+// Empty components and extra separators are left for syntax validation.
 pub(crate) fn parse_device(device: &str) -> (&str, &str, &str) {
     if device.is_empty() || device.starts_with('/') {
         return ("", "", device);
     }
 
-    let parts: Vec<&str> = device.split('=').collect();
-    if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
+    let Some((qualifier, name)) = device.split_once('=') else {
         return ("", "", device);
-    }
+    };
 
-    let name = parts[1];
-    let (vendor, class) = parse_qualifier(parts[0]);
+    let (vendor, class) = parse_qualifier(qualifier);
     if vendor.is_empty() {
         return ("", "", device);
     }
@@ -91,12 +120,9 @@ pub(crate) fn parse_device(device: &str) -> (&str, &str, &str) {
 //
 // If parsing fails, an empty vendor and the class set to the
 // verbatim input is returned.
+// Empty components and extra separators are left for syntax validation.
 pub(crate) fn parse_qualifier(kind: &str) -> (&str, &str) {
-    let parts: Vec<&str> = kind.split('/').collect();
-    if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
-        return ("", kind);
-    }
-    (parts[0], parts[1])
+    kind.split_once('/').unwrap_or(("", kind))
 }
 
 // ValidateVendorName checks the validity of a vendor name.
@@ -210,16 +236,10 @@ mod tests {
     #[test]
     fn parse_qualified_name() {
         let device = "nvidia.com/gpu=0";
-        match parser::parse_qualified_name(device) {
-            Ok((vendor, class, name)) => {
-                assert_eq!(vendor, "nvidia.com");
-                assert_eq!(class, "gpu");
-                assert_eq!(name, "0");
-            }
-            Err(e) => {
-                println!("error: {}", e);
-            }
-        }
+        assert_eq!(
+            parser::parse_qualified_name(device).unwrap(),
+            ("nvidia.com", "gpu", "0")
+        );
     }
 
     #[test]
@@ -295,7 +315,10 @@ mod tests {
             ("/dev/null", "missing vendor"),
             ("class=dev", "missing vendor"),
             ("vendor.com/class", "missing vendor"),
-            ("vendor.com/class=", "missing vendor"),
+            ("vendor.com/class=", "missing name"),
+            ("vendor.com/=dev", "missing class"),
+            ("vendor.com/class=device=other", "invalid character '='"),
+            ("vendor.com/class/extra=dev", "invalid character '/'"),
             ("_vendor/class=dev", "invalid vendor"),
             ("vendor.com/cl*ss=dev", "invalid class"),
             ("vendor.com/class=dev name", "invalid device"),
@@ -312,6 +335,162 @@ mod tests {
     fn parse_qualifier_splits_or_returns_verbatim() {
         assert_eq!(parser::parse_qualifier("vendor/class"), ("vendor", "class"));
         assert_eq!(parser::parse_qualifier("noslash"), ("", "noslash"));
-        assert_eq!(parser::parse_qualifier("vendor/"), ("", "vendor/"));
+        assert_eq!(parser::parse_qualifier("vendor/"), ("vendor", ""));
+    }
+
+    #[test]
+    fn parsing_errors_identify_components_without_duplicate_prefixes() {
+        for (input, expected) in [
+            ("vendor.com/class=", "unqualified device vendor.com/class=, missing name"),
+            ("vendor.com/=dev", "unqualified device vendor.com/=dev, missing class"),
+            ("_v/class=dev", "invalid device _v/class=dev: invalid vendor. name should start with a letter"),
+            ("v/_class=dev", "invalid device v/_class=dev: invalid class. name should start with a letter"),
+            ("v/class=device=other", "invalid device v/class=device=other: invalid character '=' in device name device=other"),
+        ] {
+            assert_eq!(parser::parse_qualified_name(input).unwrap_err().to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn accepts_qualified_names_for_any_vendor() {
+        for (vendor, class, name) in [
+            ("example.com", "accelerator", "card0"),
+            ("intel.com", "gpu", "renderD128"),
+            ("amd.com", "gpu", "all"),
+            ("Vendor_1.example", "Class-v2.0", "Dev_0-1.2:3"),
+            ("A", "z", "9"),
+            ("vendor", "class", "a::b"),
+            ("nvidia.com", "gpu", "0"),
+            (
+                "nvidia.com",
+                "gpu",
+                "GPU-12345678-abcd-1234-abcd-123456789abc",
+            ),
+            ("nvidia.com", "gpu", "0:1"),
+            (
+                "nvidia.com",
+                "gpu",
+                "MIG-12345678-abcd-1234-abcd-123456789abc",
+            ),
+            ("nvidia.com", "gpu", "all"),
+        ] {
+            let selector = format!("{vendor}/{class}={name}");
+            assert_eq!(
+                parser::parse_qualified_name(&selector).unwrap(),
+                (vendor, class, name),
+                "{selector:?}"
+            );
+            assert!(parser::is_qualified_name(&selector), "{selector:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_names_and_host_paths() {
+        for selector in [
+            "",
+            "0",
+            "all",
+            "vendor.com/class",
+            "class=device",
+            "/class=device",
+            "vendor.com/=device",
+            "vendor.com/class=",
+            "vendor.com/class=device=other",
+            "vendor.com/class/extra=device",
+            "vendor.com/class=device/extra",
+            "vendor.com/class=dev,other",
+            "vendor.com/class=0,vendor.com/class=1",
+            "/dev/nvidia0",
+            "/dev/dri/renderD128",
+            "./dev/nvidia0",
+            "../dev/nvidia0",
+            "/vendor.com/class=device",
+            " vendor.com/class=device",
+            "vendor.com/class=device ",
+            "vendor.com/class=dev\tice",
+            "vendor.com/class=device\n",
+            "vendor.com/class=dev\0ice",
+            "vendor.com/class=*",
+        ] {
+            assert!(
+                parser::parse_qualified_name(selector).is_err(),
+                "{selector:?}"
+            );
+            assert!(!parser::is_qualified_name(selector), "{selector:?}");
+        }
+    }
+
+    #[test]
+    fn enforces_ascii_component_grammar() {
+        for name in ["A", "z", "Vendor", "a0", "a_Z-9.x"] {
+            assert!(
+                parser::is_qualified_name(&format!("{name}/class=dev")),
+                "{name:?}"
+            );
+            assert!(
+                parser::is_qualified_name(&format!("vendor/{name}=dev")),
+                "{name:?}"
+            );
+        }
+        for name in [
+            "", "0", "9vendor", "_a", "-a", ".a", "a_", "a-", "a.", "a:b", "a/b", "a=b", "a b",
+            "@a", "[a", "`a", "{a", "a@b", "a[b", "a`b", "a{b", "é", "éa", "aé", "aéb", "中",
+            "a中b", "a😀b",
+        ] {
+            for selector in [format!("{name}/class=dev"), format!("vendor/{name}=dev")] {
+                assert!(
+                    parser::parse_qualified_name(&selector).is_err(),
+                    "{selector:?}"
+                );
+                assert!(!parser::is_qualified_name(&selector), "{selector:?}");
+            }
+        }
+
+        for name in ["A", "z", "0", "9", "a_Z-9.x:0", "0:1", "a::b"] {
+            assert!(
+                parser::is_qualified_name(&format!("vendor/class={name}")),
+                "{name:?}"
+            );
+        }
+        for name in [
+            "",
+            "_a",
+            "-a",
+            ".a",
+            ":a",
+            "a_",
+            "a-",
+            "a.",
+            "a:",
+            "/dev/null",
+            "a/b",
+            "a=b",
+            "a,b",
+            "a b",
+            "/",
+            ":",
+            "@a",
+            "[a",
+            "`a",
+            "{a",
+            "a@b",
+            "a[b",
+            "a`b",
+            "a{b",
+            "é",
+            "éa",
+            "aé",
+            "aéb",
+            "中",
+            "a中b",
+            "a😀b",
+        ] {
+            let selector = format!("vendor/class={name}");
+            assert!(
+                parser::parse_qualified_name(&selector).is_err(),
+                "{selector:?}"
+            );
+            assert!(!parser::is_qualified_name(&selector), "{selector:?}");
+        }
     }
 }
