@@ -34,8 +34,9 @@ Loading a Spec always applies strict parsing (unknown fields are rejected)
 and the same structural checks as the Go implementation: version gates,
 vendor and class names, annotations, container edits and devices.
 JSON-schema validation is a separate, opt-in step, like Go's
-`cdi.SetSpecValidator`: no validator is installed by default. To check every
-loaded Spec against the embedded CDI schema, install one:
+`cdi.SetSpecValidator`: no validator is installed by default and no schema
+code is compiled in. To check every loaded Spec against the embedded CDI
+schema, enable the `schema-validation` feature and install one:
 
 ```rust
 use container_device_interface::{schema::SchemaValidator, spec::set_spec_validator};
@@ -49,10 +50,10 @@ started with `--schema none`.
 
 ### Cargo features
 
-| Feature             | Default | Adds                                                                    |
-| ------------------- | ------- | ----------------------------------------------------------------------- |
-| `schema-validation` | on      | the `schema` module and `SchemaValidator`; pulls in `jsonschema`         |
-| `cli`               | off     | the `cdi` and `validate` binaries; pulls in `clap`, implies `schema-validation` |
+| Feature             | Default | Adds                                                                        |
+| ------------------- | ------- | --------------------------------------------------------------------------- |
+| `schema-validation` | off     | `schema` module and `SchemaValidator`; pulls in `jsonschema`                |
+| `cli`               | off     | `cdi` and `validate` binaries; pulls in `clap`, implies `schema-validation` |
 
 ## Binaries and signed artifacts
 
