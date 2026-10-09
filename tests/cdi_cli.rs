@@ -77,3 +77,95 @@ fn cdi_cli_inject_updates_an_oci_spec() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Updated OCI Spec:"), "{stdout}");
 }
+
+const VENDOR_SPEC: &str = r#"cdiVersion: "0.6.0"
+kind: "vendor.com/device"
+devices:
+  - name: "gpu0"
+    containerEdits:
+      env:
+        - "VENDOR=1"
+"#;
+
+fn devices_listed_by(args: &[&str]) -> String {
+    let output = Command::new(cdi_bin()).args(args).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+// A standalone schema the spec cannot satisfy shows that --schema <file>
+// installs that validator for the registry scan.
+#[test]
+fn cdi_cli_schema_flag_gates_spec_loading() {
+    let specs = tempfile::tempdir().unwrap();
+    fs::write(specs.path().join("vendor.yaml"), VENDOR_SPEC).unwrap();
+    let spec_dir = specs.path().to_str().unwrap();
+
+    let schemas = tempfile::tempdir().unwrap();
+    let strict = schemas.path().join("strict.json");
+    fs::write(
+        &strict,
+        r#"{"properties": {"kind": {"const": "other.com/device"}}}"#,
+    )
+    .unwrap();
+
+    let listed = devices_listed_by(&["--spec-dirs", spec_dir, "devices"]);
+    assert!(listed.contains("vendor.com/device=gpu0"), "{listed}");
+
+    let listed = devices_listed_by(&["--spec-dirs", spec_dir, "--schema", "none", "devices"]);
+    assert!(listed.contains("vendor.com/device=gpu0"), "{listed}");
+
+    let rejected = devices_listed_by(&[
+        "--spec-dirs",
+        spec_dir,
+        "--schema",
+        strict.to_str().unwrap(),
+        "devices",
+    ]);
+    assert!(rejected.contains("No CDI devices found"), "{rejected}");
+}
+
+// Hook.timeout is the one field the embedded schema constrains (uint32) that
+// the serde types (i64) and Spec::validate, like Go's library, do not check:
+// the spec the builtin schema rejects and `none` loads.
+const NEGATIVE_TIMEOUT_SPEC: &str = r#"cdiVersion: "0.6.0"
+kind: "vendor.com/hooked"
+devices:
+  - name: "gpu0"
+    containerEdits:
+      hooks:
+        - hookName: "createContainer"
+          path: "/bin/true"
+          timeout: -1
+"#;
+
+#[test]
+fn cdi_cli_schema_none_skips_the_builtin_schema() {
+    let specs = tempfile::tempdir().unwrap();
+    fs::write(specs.path().join("hooked.yaml"), NEGATIVE_TIMEOUT_SPEC).unwrap();
+    let spec_dir = specs.path().to_str().unwrap();
+
+    let rejected = devices_listed_by(&["--spec-dirs", spec_dir, "devices"]);
+    assert!(rejected.contains("No CDI devices found"), "{rejected}");
+    let rejected = devices_listed_by(&["--spec-dirs", spec_dir, "--schema", "builtin", "devices"]);
+    assert!(rejected.contains("No CDI devices found"), "{rejected}");
+
+    let listed = devices_listed_by(&["--spec-dirs", spec_dir, "--schema", "none", "devices"]);
+    assert!(listed.contains("vendor.com/hooked=gpu0"), "{listed}");
+}
+
+#[test]
+fn cdi_cli_rejects_missing_schema_file() {
+    // --schema is global: it is accepted after the subcommand as well.
+    let output = Command::new(cdi_bin())
+        .args(["devices", "--schema", "/nonexistent/schema.json"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("/nonexistent/schema.json"), "{stderr}");
+}

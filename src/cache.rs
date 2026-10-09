@@ -84,8 +84,8 @@ pub fn new_cache(options: Vec<CdiOption>) -> Arc<Mutex<Cache>> {
         let mut c = cache.lock().unwrap();
 
         with_spec_dirs(&DEFAULT_SPEC_DIRS)(&mut c);
+        // configure() performs the initial scan.
         c.configure(options);
-        let _ = c.refresh();
     } // MutexGuard `c` is dropped here
 
     cache
@@ -108,10 +108,19 @@ impl Cache {
         }
     }
 
+    // configure applies the options and rescans, as Go's configure does.
+    // The previous content goes first: refresh() keeps the old content when
+    // a scan fails, which would otherwise leave devices from directories
+    // that are no longer configured.
     pub fn configure(&mut self, options: Vec<CdiOption>) {
         for option in options {
             option(self);
         }
+        self.specs.clear();
+        self.devices.clear();
+        self.errors.clear();
+        self.dir_errors.clear();
+        let _ = self.refresh();
     }
 
     pub fn get_device(&mut self, dev_name: &str) -> Option<&Device> {
@@ -346,6 +355,35 @@ devices:
         assert!(cache.get_vendor_specs("other.com").is_empty());
         assert!(cache.get_device("vendor.com/device=gpu0").is_some());
         assert!(cache.get_device("vendor.com/device=missing").is_none());
+    }
+
+    #[test]
+    fn configure_rescans_and_drops_stale_content() {
+        let good = tempfile::tempdir().unwrap();
+        fs::write(
+            good.path().join("vendor.yaml"),
+            spec_yaml("vendor.com/device", "VENDOR=1"),
+        )
+        .unwrap();
+        let broken = tempfile::tempdir().unwrap();
+        fs::write(
+            broken.path().join("broken.yaml"),
+            "cdiVersion: \"0.6.0\"\nkind: \"vendor.com/device\"\ndevices: []\n",
+        )
+        .unwrap();
+        let mut cache = dir_cache(&[good.path().to_str().unwrap()]);
+        cache.refresh().unwrap();
+        assert_eq!(cache.list_devices(), vec!["vendor.com/device=gpu0"]);
+
+        // Switching to a directory whose scan fails must not keep the
+        // devices of the directories that were configured before.
+        cache.configure(vec![with_spec_dirs(&[broken.path().to_str().unwrap()])]);
+        assert!(cache.refresh().is_err());
+        assert!(cache.list_devices().is_empty());
+
+        // Switching back rescans without an explicit refresh().
+        cache.configure(vec![with_spec_dirs(&[good.path().to_str().unwrap()])]);
+        assert_eq!(cache.list_devices(), vec!["vendor.com/device=gpu0"]);
     }
 
     #[test]

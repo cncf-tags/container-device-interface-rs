@@ -12,6 +12,16 @@ use cdi_ops::{
 fn main() -> Result<()> {
     let cli = CdiCli::parse();
 
+    // Like the Go cdi tool, Spec files are schema-validated as the registry
+    // loads them unless --schema none is given.
+    if let Some(validator) = cdi::schema::load(&cli.schema)? {
+        cdi::spec::set_spec_validator(validator);
+    }
+    if !cli.spec_dirs.is_empty() {
+        let dirs: Vec<&str> = cli.spec_dirs.iter().map(String::as_str).collect();
+        cdi::default_cache::configure(vec![cdi::spec_dirs::with_spec_dirs(&dirs)])?;
+    }
+
     match &cli.command {
         Commands::Devices(args) => {
             handle_cdi_devices(args)?;
