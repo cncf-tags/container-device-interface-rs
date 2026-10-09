@@ -12,6 +12,12 @@ use cdi_ops::{
 fn main() -> Result<()> {
     let cli = CdiCli::parse();
 
+    // Like the Go cdi tool, Spec files are schema-validated as the registry
+    // loads them unless --schema none is given.
+    if let Some(validator) = cdi::schema::load(&cli.schema)? {
+        cdi::spec::set_spec_validator(validator);
+    }
+
     match &cli.command {
         Commands::Devices(args) => {
             handle_cdi_devices(args)?;
