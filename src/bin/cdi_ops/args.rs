@@ -16,6 +16,16 @@ additional help about <command> by using 'cdi <command> -h'.
 )]
 #[command(propagate_version = true)]
 pub struct CdiCli {
+    /// JSON Schema that CDI Spec files are validated against when the
+    /// registry is loaded: "builtin", "none" to disable, or a schema file
+    #[arg(long = "schema", global = true, default_value = "builtin")]
+    pub schema: String,
+
+    /// Directories to scan for CDI Spec files instead of the defaults
+    /// (/etc/cdi, /var/run/cdi); comma-separated or repeated
+    #[arg(short = 'd', long = "spec-dirs", global = true, value_delimiter = ',')]
+    pub spec_dirs: Vec<String>,
+
     #[command(subcommand)]
     pub command: Commands,
 }

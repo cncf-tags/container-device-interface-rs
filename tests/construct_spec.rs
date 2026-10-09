@@ -60,7 +60,20 @@ fn spec_with_one_gpu() -> Spec {
 
 #[test]
 fn spec_is_constructible_and_validates() {
+    // No Spec validator is installed by default (CDI-go parity), so this is
+    // the bare hook; the schema check itself is exercised below.
     validate_spec(&spec_with_one_gpu()).expect("programmatically built spec should validate");
+}
+
+#[cfg(feature = "schema-validation")]
+#[test]
+fn spec_validates_against_the_builtin_schema() {
+    use container_device_interface::schema::SchemaValidator;
+    use container_device_interface::spec::SpecValidator;
+
+    SchemaValidator::builtin()
+        .validate_spec(&spec_with_one_gpu())
+        .expect("programmatically built spec should pass the builtin schema");
 }
 
 #[test]
