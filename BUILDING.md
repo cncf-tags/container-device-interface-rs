@@ -6,7 +6,8 @@ The compiler version is pinned in `rust-toolchain.toml`; rustup installs it
 on first use.
 
 ```bash
-cargo build --release --locked
+cargo build --release --locked                # library only, no default features
+cargo build --release --locked --features cli # plus the cdi and validate binaries
 ```
 
 Release artifacts (`cdi`, `validate`, `libcontainer_device_interface.so`)
