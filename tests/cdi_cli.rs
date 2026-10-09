@@ -77,3 +77,28 @@ fn cdi_cli_inject_updates_an_oci_spec() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Updated OCI Spec:"), "{stdout}");
 }
+
+#[test]
+fn cdi_cli_schema_none_skips_spec_validation() {
+    let output = Command::new(cdi_bin())
+        .args(["--schema", "none", "devices"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn cdi_cli_rejects_missing_schema_file() {
+    // --schema is global: it is accepted after the subcommand as well.
+    let output = Command::new(cdi_bin())
+        .args(["devices", "--schema", "/nonexistent/schema.json"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("/nonexistent/schema.json"), "{stderr}");
+}

@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::PathBuf,
+    sync::{Arc, PoisonError, RwLock},
+};
 
 use anyhow::{anyhow, Context, Result};
 use oci_spec::runtime as oci;
@@ -133,19 +137,70 @@ pub fn parse_spec(path: &PathBuf) -> Result<CDISpec> {
     Ok(cdi_spec)
 }
 
-// validate_spec validates the Spec against the JSON schema; a no-op
-// without the schema-validation feature.
-pub fn validate_spec(raw_spec: &CDISpec) -> Result<()> {
-    #[cfg(feature = "schema-validation")]
-    {
-        let data =
-            serde_yaml::to_string(raw_spec).context("marshal CDI spec for schema validation")?;
-        crate::schema::validate_builtin(data.as_bytes()).context("invalid CDI Spec schema")?;
-    }
-    #[cfg(not(feature = "schema-validation"))]
-    let _ = raw_spec;
-    Ok(())
+// SpecValidator is an externally supplied validation step that runs on
+// every raw CDI Spec being loaded (read_spec, new_spec); the counterpart
+// of Go's cdi.SetSpecValidator. The library installs none: strict
+// deserialisation (unknown fields are rejected) and Spec::validate already
+// enforce what CDI-go enforces for runtime consumers. The CLIs install a
+// JSON-schema validator (schema::SchemaValidator, behind the
+// schema-validation feature); any Send + Sync Fn(&CDISpec) -> Result<()>
+// works as well.
+pub trait SpecValidator: Send + Sync {
+    fn validate_spec(&self, raw_spec: &CDISpec) -> Result<()>;
 }
+
+impl<F> SpecValidator for F
+where
+    F: Fn(&CDISpec) -> Result<()> + Send + Sync,
+{
+    fn validate_spec(&self, raw_spec: &CDISpec) -> Result<()> {
+        self(raw_spec)
+    }
+}
+
+static SPEC_VALIDATOR: RwLock<Option<Arc<dyn SpecValidator>>> = RwLock::new(None);
+
+// set_spec_validator installs the process-wide Spec validator, replacing
+// any previous one. It runs whenever a Spec is loaded (read_spec, new_spec)
+// and from validate_spec.
+pub fn set_spec_validator(validator: impl SpecValidator + 'static) {
+    let validator: Arc<dyn SpecValidator> = Arc::new(validator);
+    *SPEC_VALIDATOR
+        .write()
+        .unwrap_or_else(PoisonError::into_inner) = Some(validator);
+}
+
+// clear_spec_validator removes the installed Spec validator; validate_spec
+// becomes a no-op again (Go: SetSpecValidator(nil)).
+pub fn clear_spec_validator() {
+    *SPEC_VALIDATOR
+        .write()
+        .unwrap_or_else(PoisonError::into_inner) = None;
+}
+
+fn spec_validator() -> Option<Arc<dyn SpecValidator>> {
+    SPEC_VALIDATOR
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
+// validate_spec runs the installed Spec validator (see set_spec_validator)
+// against the raw Spec; a no-op when none is installed.
+pub fn validate_spec(raw_spec: &CDISpec) -> Result<()> {
+    match spec_validator() {
+        Some(validator) => validator
+            .validate_spec(raw_spec)
+            .context("Spec validation failed"),
+        None => Ok(()),
+    }
+}
+
+// The validator is process-global: tests that install one serialise on this
+// lock and only reject a marker kind so concurrently running tests that load
+// Specs are unaffected.
+#[cfg(test)]
+pub(crate) static SPEC_VALIDATOR_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 // read_spec reads the given CDI Spec file. The resulting Spec is
 // assigned the given priority. If reading or parsing the Spec
@@ -213,6 +268,80 @@ mod tests {
     use super::*;
     use oci_spec::runtime as oci;
     use std::path::PathBuf;
+    use std::sync::PoisonError;
+
+    const REJECTED_KIND: &str = "reject.example.com/device";
+
+    fn raw_spec_with_kind(kind: &str) -> CDISpec {
+        CDISpec {
+            version: "1.1.0".to_string(),
+            kind: kind.to_string(),
+            devices: vec![crate::specs::config::Device {
+                name: "gpu0".to_string(),
+                container_edits: crate::specs::config::ContainerEdits {
+                    device_nodes: Some(vec![crate::specs::config::DeviceNode {
+                        path: "/dev/null".to_string(),
+                        r#type: Some("c".to_string()),
+                        major: Some(1),
+                        minor: Some(3),
+                        ..Default::default()
+                    }]),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn reject_marker_kind(raw_spec: &CDISpec) -> Result<()> {
+        if raw_spec.kind == REJECTED_KIND {
+            return Err(anyhow!("marker kind rejected"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn installed_spec_validator_gates_new_spec() {
+        let _lock = SPEC_VALIDATOR_TEST_LOCK
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let path = PathBuf::from("/tmp/reject-device.yaml");
+        let rejected = raw_spec_with_kind(REJECTED_KIND);
+
+        set_spec_validator(reject_marker_kind);
+        let err =
+            new_spec(&rejected, &path, 0).expect_err("installed validator rejects the marker kind");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("Spec validation failed"), "{msg}");
+        assert!(msg.contains("marker kind rejected"), "{msg}");
+        new_spec(&raw_spec_with_kind("vendor.com/device"), &path, 0)
+            .expect("installed validator accepts other kinds");
+
+        clear_spec_validator();
+        new_spec(&rejected, &path, 0).expect("without a validator the Spec loads");
+    }
+
+    #[test]
+    fn set_spec_validator_replaces_the_previous_validator() {
+        let _lock = SPEC_VALIDATOR_TEST_LOCK
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let rejected = raw_spec_with_kind(REJECTED_KIND);
+
+        set_spec_validator(reject_marker_kind);
+        set_spec_validator(|raw_spec: &CDISpec| -> Result<()> {
+            if raw_spec.kind == REJECTED_KIND {
+                return Err(anyhow!("closure validator"));
+            }
+            Ok(())
+        });
+        let err = validate_spec(&rejected).expect_err("closure validator rejects the marker kind");
+        assert!(format!("{err:#}").contains("closure validator"));
+
+        clear_spec_validator();
+        validate_spec(&rejected).expect("validate_spec is a no-op without a validator");
+    }
 
     #[test]
     fn parse_spec_rejects_unknown_fields() {
