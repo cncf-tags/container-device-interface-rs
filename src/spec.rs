@@ -128,7 +128,11 @@ pub fn parse_spec(path: &PathBuf) -> Result<CDISpec> {
     }
 
     let data = std::fs::read(path).context("read config file")?;
-    let cdi_spec: CDISpec = serde_yaml::from_slice(&data).context("serde yaml read from file")?;
+    let cdi_spec: CDISpec = serde_saphyr::from_slice_with_options(
+        &data,
+        serde_saphyr::options! { strict_booleans: true },
+    )
+    .context("parse CDI spec from file")?;
 
     Ok(cdi_spec)
 }
@@ -139,8 +143,8 @@ pub fn validate_spec(raw_spec: &CDISpec) -> Result<()> {
     #[cfg(feature = "schema-validation")]
     {
         let data =
-            serde_yaml::to_string(raw_spec).context("marshal CDI spec for schema validation")?;
-        crate::schema::validate_builtin(data.as_bytes()).context("invalid CDI Spec schema")?;
+            serde_json::to_vec(raw_spec).context("marshal CDI spec for schema validation")?;
+        crate::schema::validate_builtin(&data).context("invalid CDI Spec schema")?;
     }
     #[cfg(not(feature = "schema-validation"))]
     let _ = raw_spec;
@@ -213,6 +217,41 @@ mod tests {
     use super::*;
     use oci_spec::runtime as oci;
     use std::path::PathBuf;
+
+    #[test]
+    fn read_spec_accepts_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vendor.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "cdiVersion": "1.1.0",
+                "kind": "vendor.com/device",
+                "devices": [{
+                    "name": "gpu0",
+                    "containerEdits": {"deviceNodes": [{"path": "/dev/null"}]}
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        let spec = read_spec(&path, 0).expect("JSON CDI specs should parse and validate");
+        assert!(spec.get_device("gpu0").is_some());
+    }
+
+    #[test]
+    fn parse_spec_rejects_yaml_1_1_boolean_shorthands() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vendor.yaml");
+        let fixture = std::fs::read_to_string("tests/fixtures/cdi-v1.1-good.yaml").unwrap();
+        std::fs::write(
+            &path,
+            fixture.replace("enableMonitoring: true", "enableMonitoring: on"),
+        )
+        .unwrap();
+
+        assert!(parse_spec(&path).is_err());
+    }
 
     #[test]
     fn parse_spec_rejects_unknown_fields() {

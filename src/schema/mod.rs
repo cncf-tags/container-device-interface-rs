@@ -76,9 +76,12 @@ pub fn compile_cdi_schema(schema_data: &[u8], defs_data: &[u8]) -> Result<Valida
 }
 
 pub fn document_value(doc_data: &[u8]) -> Result<Value> {
-    let yaml_value: serde_yaml::Value =
-        serde_yaml::from_slice(doc_data).context("parse CDI document")?;
-    serde_json::to_value(yaml_value).context("convert CDI document to JSON value")
+    // Keep YAML 1.2 semantics: words like "on" and "off" are strings.
+    serde_saphyr::from_slice_with_options(
+        doc_data,
+        serde_saphyr::options! { strict_booleans: true },
+    )
+    .context("parse CDI document")
 }
 
 pub fn validate(schema: &Validator, doc_data: &[u8]) -> Result<()> {
@@ -114,8 +117,11 @@ fn validate_value(schema: &Validator, doc: &Value) -> Result<()> {
 }
 
 fn validate_typed_cdi_document(doc_data: &[u8]) -> Result<()> {
-    let spec: CDISpec =
-        serde_yaml::from_slice(doc_data).context("parse CDI document using declared version")?;
+    let spec: CDISpec = serde_saphyr::from_slice_with_options(
+        doc_data,
+        serde_saphyr::options! { strict_booleans: true },
+    )
+    .context("parse CDI document using declared version")?;
     validate_declared_version_fields(&spec)
 }
 
@@ -168,6 +174,28 @@ fn validate_annotations(name: &str, annotations: Option<&Value>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn document_value_preserves_yaml_1_2_scalars() {
+        let doc = b"on: off\nyes: no\nboolean: true\nnumber: 42\nquoted: '42'\n";
+        let value = document_value(doc).expect("parse YAML scalars");
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "on": "off",
+                "yes": "no",
+                "boolean": true,
+                "number": 42,
+                "quoted": "42",
+            })
+        );
+    }
+
+    #[test]
+    fn document_value_rejects_duplicate_keys() {
+        assert!(document_value(b"kind: vendor.com/a\nkind: vendor.com/b\n").is_err());
+    }
 
     #[test]
     fn builtin_schema_accepts_v1_1_features() {
