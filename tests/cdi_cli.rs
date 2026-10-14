@@ -77,3 +77,68 @@ fn cdi_cli_inject_updates_an_oci_spec() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Updated OCI Spec:"), "{stdout}");
 }
+
+const VENDOR_SPEC: &str = r#"cdiVersion: "0.6.0"
+kind: "vendor.com/device"
+devices:
+  - name: "gpu0"
+    containerEdits:
+      env:
+        - "VENDOR=1"
+"#;
+
+fn devices_listed_by(args: &[&str]) -> String {
+    let output = Command::new(cdi_bin()).args(args).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+// The embedded schema is weaker than serde plus Spec::validate, so no spec
+// distinguishes `builtin` from `none` by acceptance; a standalone schema the
+// spec cannot satisfy shows that --schema installs a validator and that
+// `none` skips it.
+#[test]
+fn cdi_cli_schema_flag_gates_spec_loading() {
+    let specs = tempfile::tempdir().unwrap();
+    fs::write(specs.path().join("vendor.yaml"), VENDOR_SPEC).unwrap();
+    let spec_dir = specs.path().to_str().unwrap();
+
+    let schemas = tempfile::tempdir().unwrap();
+    let strict = schemas.path().join("strict.json");
+    fs::write(
+        &strict,
+        r#"{"properties": {"kind": {"const": "other.com/device"}}}"#,
+    )
+    .unwrap();
+
+    let listed = devices_listed_by(&["--spec-dirs", spec_dir, "devices"]);
+    assert!(listed.contains("vendor.com/device=gpu0"), "{listed}");
+
+    let listed = devices_listed_by(&["--spec-dirs", spec_dir, "--schema", "none", "devices"]);
+    assert!(listed.contains("vendor.com/device=gpu0"), "{listed}");
+
+    let rejected = devices_listed_by(&[
+        "--spec-dirs",
+        spec_dir,
+        "--schema",
+        strict.to_str().unwrap(),
+        "devices",
+    ]);
+    assert!(rejected.contains("No CDI devices found"), "{rejected}");
+}
+
+#[test]
+fn cdi_cli_rejects_missing_schema_file() {
+    // --schema is global: it is accepted after the subcommand as well.
+    let output = Command::new(cdi_bin())
+        .args(["devices", "--schema", "/nonexistent/schema.json"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("/nonexistent/schema.json"), "{stderr}");
+}

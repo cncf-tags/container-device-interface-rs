@@ -16,10 +16,15 @@ rust-version = "1.86.0"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["schema-validation"]
-# Enable the CLI binaries (cdi, validate); pulls in clap.
-cli = ["dep:clap"]
-# Enable JSON schema validation via jsonschema; pulled in by default.
+# No default features: like Go consumers of pkg/cdi, library users get
+# strict parsing plus Spec::validate without any schema code or deps.
+default = []
+# Enable the CLI binaries (cdi, validate); pulls in clap. Both validate
+# Spec files against a JSON schema, so this implies schema-validation.
+cli = ["dep:clap", "schema-validation"]
+# Enable the `schema` module: JSON-schema validation of CDI Specs via
+# jsonschema. Nothing is validated until a schema::SchemaValidator is
+# installed with spec::set_spec_validator (the CLIs do this on start).
 schema-validation = ["dep:jsonschema"]
 
 [[bin]]
