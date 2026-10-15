@@ -1,5 +1,5 @@
 // Spawns the cdi binary; miri cannot emulate process creation.
-#![cfg(not(miri))]
+#![cfg(all(not(miri), feature = "cli"))]
 
 use std::{fs, process::Command};
 
