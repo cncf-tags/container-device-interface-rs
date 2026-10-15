@@ -9,7 +9,7 @@ homepage = "https://github.com/cncf-tags/container-device-interface"
 readme = "README.md"
 categories = ["command-line-utilities"]
 keywords = ["container"]
-rust-version = "1.86.0"
+rust-version = "1.89.0"
 
 [lib]
 # cdylib stays: the release tarball ships libcontainer_device_interface.so
@@ -47,7 +47,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 libc = "0.2.186"
 lazy_static = "1.5"
 path-clean = "1.0.1"
-serde_yaml = "0.9.34"
+serde-saphyr = "2.0.0"
 semver = "1.0.28"
 regex = "1.12.3"
 const_format = "0.2.36"

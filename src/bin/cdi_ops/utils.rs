@@ -26,7 +26,11 @@ pub fn read_oci_spec(path: &str) -> Result<oci::Spec> {
     }
 
     let ocispec_file = BufReader::new(File::open(path)?);
-    let oci_spec: oci::Spec = serde_yaml::from_reader(ocispec_file).context("read config")?;
+    let oci_spec: oci::Spec = serde_saphyr::from_reader_with_options(
+        ocispec_file,
+        serde_saphyr::options! { strict_booleans: true },
+    )
+    .context("read config")?;
 
     Ok(oci_spec)
 }

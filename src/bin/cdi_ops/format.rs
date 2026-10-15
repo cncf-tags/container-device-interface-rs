@@ -1,6 +1,5 @@
 use serde::Serialize;
 use serde_json;
-use serde_yaml;
 use std::error::Error;
 use std::fmt::Write;
 use std::path::Path;
@@ -21,7 +20,7 @@ pub fn marshal_object<T: Serialize>(level: usize, obj: &T, format: &str) -> Stri
     let raw_result: Result<String, Box<dyn Error>> = if format == "json" {
         serde_json::to_string_pretty(obj).map_err(|e| Box::new(e) as Box<dyn Error>)
     } else {
-        serde_yaml::to_string(obj).map_err(|e| Box::new(e) as Box<dyn Error>)
+        serde_saphyr::to_string(obj).map_err(|e| Box::new(e) as Box<dyn Error>)
     };
 
     match raw_result {
