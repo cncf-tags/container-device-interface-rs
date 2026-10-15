@@ -257,7 +257,7 @@ mod tests {
     fn parse_spec_rejects_unknown_fields() {
         let path = PathBuf::from("tests/fixtures/cdi-unknown-field.yaml");
         let err = parse_spec(&path).expect_err("unknown field should fail");
-        assert!(err.to_string().contains("serde yaml read from file"));
+        assert!(err.to_string().contains("parse CDI spec from file"));
     }
 
     #[test]
