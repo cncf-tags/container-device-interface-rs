@@ -14,8 +14,10 @@ the built-in JSON schema lives in `src/schema/schema.json` plus
 
 ## Build, Test, and Formatting Commands
 
-- `cargo build --all-targets`: build the library and both binaries.
-- `cargo test`: run unit and integration tests.
+- `cargo build`: build the library with no default features (no schema code).
+- `cargo build --all-targets --features cli`: build the library and both
+  binaries; `cli` implies `schema-validation`.
+- `cargo test --all-features`: run unit and integration tests as CI does.
 - `cargo test --test validate_cli`: focus on validator CLI/schema behavior.
 - `cargo fmt --all -- --check`: check formatting; use `cargo fmt --all` to fix.
 - `cargo clippy --all-targets --all-features -- -D warnings`: match CI linting.

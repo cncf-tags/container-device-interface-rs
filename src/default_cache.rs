@@ -23,12 +23,21 @@ pub fn get_default_cache() -> Arc<Mutex<Cache>> {
 }
 
 pub fn configure(options: Vec<CdiOption>) -> Result<()> {
-    let cache = get_or_create_default_cache();
-    let mut cache = cache.lock().unwrap();
     if options.is_empty() {
         return Ok(());
     }
-    cache.configure(options);
+    // On first use the cache is created with the options already applied,
+    // so its initial scan honours them (new_cache scans on creation): a
+    // with_spec_dirs() override must never see the default directories.
+    let mut pending = Some(options);
+    let cache = DEFAULT_CACHE.get_or_init(|| {
+        let mut options = vec![with_auto_refresh(true)];
+        options.extend(pending.take().expect("options are consumed once"));
+        new_cache(options)
+    });
+    if let Some(options) = pending {
+        cache.lock().unwrap().configure(options);
+    }
     Ok(())
 }
 
@@ -69,13 +78,6 @@ mod tests {
     // singleton, so independent tests would race each other's state.
     #[test]
     fn default_cache_is_a_singleton_and_configurable() {
-        let first = get_default_cache();
-        let second = get_default_cache();
-        assert!(
-            Arc::ptr_eq(&first, &second),
-            "get_default_cache must return the same instance"
-        );
-
         let dir = tempfile::tempdir().unwrap();
         fs::write(
             dir.path().join("vendor.yaml"),
@@ -90,12 +92,21 @@ devices:
         )
         .unwrap();
 
+        // First use: configure() creates the singleton with the directory
+        // applied, so the default directories are never scanned here.
         configure(vec![with_spec_dirs(&[dir.path().to_str().unwrap()])]).unwrap();
+        let first = get_default_cache();
+        let second = get_default_cache();
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "get_default_cache must return the same instance"
+        );
         assert_eq!(
             first.lock().unwrap().spec_dirs,
             vec![dir.path().to_str().unwrap().to_string()],
             "configure must act on the singleton"
         );
+        assert_eq!(list_devices(), vec!["vendor.com/device=gpu0".to_string()]);
 
         // Empty configure is a no-op, not an error.
         configure(vec![]).unwrap();
@@ -108,5 +119,17 @@ devices:
         inject_devices(&mut oci_spec, vec!["vendor.com/device=gpu0".to_string()]).unwrap();
         let env = oci_spec.process().as_ref().unwrap().env().as_ref().unwrap();
         assert!(env.contains(&"VENDOR=1".to_string()));
+
+        // Reconfiguring to a directory whose only spec fails to load must
+        // not keep the devices of the previous directory.
+        let broken = tempfile::tempdir().unwrap();
+        fs::write(
+            broken.path().join("broken.yaml"),
+            "cdiVersion: \"0.6.0\"\nkind: \"vendor.com/device\"\ndevices: []\n",
+        )
+        .unwrap();
+        configure(vec![with_spec_dirs(&[broken.path().to_str().unwrap()])]).unwrap();
+        assert!(refresh().is_err());
+        assert!(list_devices().is_empty());
     }
 }
